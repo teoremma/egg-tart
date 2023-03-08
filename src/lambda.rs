@@ -201,16 +201,20 @@ fn expr_contains_sym(rec_expr: &RecExpr<Lambda>, start_index: usize, end_index: 
         })
 }
 
-fn substitute_rec_expr(rec_expr: &mut RecExpr<Lambda>, id: Id, subst_sym: Symbol, subst_id: Id, fresh_prefix_id: Id) {
+fn substitute_rec_expr(rec_expr: &mut RecExpr<Lambda>, seen: &mut HashSet<Id>, id: Id, subst_sym: Symbol, subst_id: Id, fresh_prefix_id: Id) {
+    if seen.contains(&id) {
+        return
+    }
+    seen.insert(id);
     match rec_expr[id] {
         Lambda::Add([id1, id2]) | Lambda::Eq([id1, id2]) | Lambda::App([id1, id2]) | Lambda::Fix([id1, id2]) => {
-            substitute_rec_expr(rec_expr, id1, subst_sym, subst_id, fresh_prefix_id);
-            substitute_rec_expr(rec_expr, id2, subst_sym, subst_id, fresh_prefix_id);
+            substitute_rec_expr(rec_expr, seen, id1, subst_sym, subst_id, fresh_prefix_id);
+            substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id, fresh_prefix_id);
         }
         Lambda::If([id1, id2, id3]) => {
-            substitute_rec_expr(rec_expr, id1, subst_sym, subst_id, fresh_prefix_id);
-            substitute_rec_expr(rec_expr, id2, subst_sym, subst_id, fresh_prefix_id);
-            substitute_rec_expr(rec_expr, id3, subst_sym, subst_id, fresh_prefix_id);
+            substitute_rec_expr(rec_expr, seen, id1, subst_sym, subst_id, fresh_prefix_id);
+            substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id, fresh_prefix_id);
+            substitute_rec_expr(rec_expr, seen, id3, subst_sym, subst_id, fresh_prefix_id);
         }
         Lambda::Lambda([id1, id2]) => {
             match rec_expr[id1] {
@@ -223,7 +227,7 @@ fn substitute_rec_expr(rec_expr: &mut RecExpr<Lambda>, id: Id, subst_sym: Symbol
                         // recursively substitute...
                         rec_expr[id1] = Lambda::Symbol(fresh_sym);
                     }
-                    substitute_rec_expr(rec_expr, id2, subst_sym, subst_id, fresh_prefix_id);
+                    substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id, fresh_prefix_id);
                 }
                 _ => panic!("substitute_rec_expr: Lambda variable points to {:?}, which isn't a symbol.", rec_expr[id1])
             }
@@ -239,8 +243,8 @@ fn substitute_rec_expr(rec_expr: &mut RecExpr<Lambda>, id: Id, subst_sym: Symbol
                         // recursively substitute...
                         rec_expr[id1] = Lambda::Symbol(fresh_sym);
                     }
-                    substitute_rec_expr(rec_expr, id2, subst_sym, subst_id, fresh_prefix_id);
-                    substitute_rec_expr(rec_expr, id3, subst_sym, subst_id, fresh_prefix_id);
+                    substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id, fresh_prefix_id);
+                    substitute_rec_expr(rec_expr, seen, id3, subst_sym, subst_id, fresh_prefix_id);
                 }
                 _ => panic!("substitute_rec_expr: Let variable points to {:?}, which isn't a symbol.", rec_expr[id1])
             }
@@ -301,8 +305,9 @@ impl Applier<Lambda, LambdaAnalysis> for SketchGuidedBetaReduction {
             .into();
         let body_id = body_and_e_rec_expr.as_ref().len() - 1;
         let mut new_rec_expr = body_and_e_rec_expr.clone();
-        // println!("body: {:?}, e: {:?}, body_and_e: {:?}", best_body.as_ref(), best_e.as_ref(), body_and_e_rec_expr.as_ref());
-        substitute_rec_expr(&mut new_rec_expr, body_id.into(), sym_to_replace, e_id.into(), eclass);
+        // println!("start body: {:?}, e: {:?}, body_and_e: {:?}", best_body.as_ref(), best_e.as_ref(), body_and_e_rec_expr.as_ref());
+        substitute_rec_expr(&mut new_rec_expr, &mut HashSet::default(), body_id.into(), sym_to_replace, e_id.into(), eclass);
+        // println!("end");
         let new_id = egraph.add_expr(&new_rec_expr);
         egraph.union(eclass, new_id);
         vec!(new_id) // + changed_ids
