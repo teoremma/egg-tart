@@ -627,6 +627,7 @@ egg::test_fn! {
 
 // Times out with 8 doubles
 // (with 7 doubles, takes ~20s)
+// (sketch guided takes ~90s with 4 doubles)
 egg::test_fn! {
     lambda_compose_many_many_1, rules(),
     "(let compose (lam f (lam g (lam x (app (var f)
@@ -648,6 +649,7 @@ egg::test_fn! {
 
 // Times out with 5 doubles
 // (with 4 doubles, takes ~20s)
+// (sketch guided runs for >90s with 3 doubles)
 egg::test_fn! {
     lambda_compose_many_many_2, rules(),
     "(let compose (lam f (lam g (lam x (app (var f)
