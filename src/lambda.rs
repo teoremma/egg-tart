@@ -382,7 +382,7 @@ fn substitute(
                     let fresh_sym = Lambda::Symbol(format!("_{}", target_eclass).into());
                     let fresh_sym_id = egraph.add(fresh_sym);
                     let fresh_sym_var_id = egraph.add(Lambda::Var(fresh_sym_id));
-                    println!("fresh sym_var_id: {:?}, fresh sym_id: {:?}", fresh_sym_var_id, fresh_sym_id);
+                    // println!("fresh sym_var_id: {:?}, fresh sym_id: {:?}", fresh_sym_var_id, fresh_sym_id);
                     let fresh_e2s = substitute(egraph, sym, fresh_sym_var_id, e2, &mut HashMap::default());
                     // Can't be done without a termporary variable because
                     // egraph would be borrowed twice. Probably better to not
@@ -417,7 +417,7 @@ fn substitute(
                     let fresh_sym = Lambda::Symbol(format!("_{}", target_eclass).into());
                     let fresh_sym_id = egraph.add(fresh_sym);
                     let fresh_sym_var_id = egraph.add(Lambda::Var(fresh_sym_id));
-                    println!("fresh sym_var_id: {:?}, fresh sym_id: {:?}", fresh_sym_var_id, fresh_sym_id);
+                    // println!("fresh sym_var_id: {:?}, fresh sym_id: {:?}", fresh_sym_var_id, fresh_sym_id);
                     let fresh_e2s = substitute(egraph, sym, fresh_sym_var_id, e2, &mut HashMap::default());
                     // Can't be done without a termporary variable because
                     // egraph would be borrowed twice. Probably better to not
@@ -491,13 +491,13 @@ impl Applier<Lambda, LambdaAnalysis> for CallByName {
         _searcher_ast: Option<&PatternAst<Lambda>>,
         _rule_name: Symbol,
     ) -> Vec<Id> {
-        println!("eclass: {:?}, subst_v: {:?}, subst_e: {:?}, subst_body: {:?}", eclass, subst[self.v], subst[self.e], subst[self.body]);
+        // println!("eclass: {:?}, subst_v: {:?}, subst_e: {:?}, subst_body: {:?}", eclass, subst[self.v], subst[self.e], subst[self.body]);
         let subst_sym = get_sym(subst[self.v], egraph);
         let new_ids = substitute(egraph, subst_sym, subst[self.e], subst[self.body], &mut HashMap::default());
         for id in &new_ids {
             egraph.union(eclass, *id);
         }
-        println!("eclass: {:?}, subst_sym: {:?}, subst_e: {:?}, subst_body: {:?}, new_ids: {:?}", eclass, subst_sym, subst[self.e], subst[self.body], new_ids.clone());
+        // println!("eclass: {:?}, subst_sym: {:?}, subst_e: {:?}, subst_body: {:?}, new_ids: {:?}", eclass, subst_sym, subst[self.e], subst[self.body], new_ids.clone());
         new_ids.into_iter().collect()
     }
 }
@@ -646,6 +646,46 @@ egg::test_fn! {
     =>
     "(lam ?x (+ (var ?x) 256))"
 }
+
+// 8 doubles times out for CallByName
+// 7 doubles takes ~20s
+// SketchGuided can handle many_many_2 but not this one...
+//   might be a faulty implementation
+// small step semantics takes >120s for 7
+egg::test_fn! {
+    lambda_compose_many_many_1_no_let, rules(),
+    "(app (app
+     (lam double
+     (lam add1
+     (app (var double)
+     (app (var double)
+     (app (var double)
+     (app (var double)
+     (app (var double)
+     (app (var double)
+     (app (var double)
+         (var add1))))))))))
+(lam f (app (app (lam f (lam g (lam x (app (var f)
+                                       (app (var g) (var x)))))) (var f)) (var f)))) (lam y (+ (var y) 1)))"
+    =>
+    "(lam ?x (+ (var ?x) 128))"
+}
+
+egg::test_fn! {
+    lambda_compose_many_many_2_no_let, rules(),
+    "(app (app
+     (lam double
+     (lam add1
+     (app (var double)
+     (app (var double)
+     (app (var double)
+         (var add1))))))
+(lam f (app (app (lam f (lam g (lam x (app (var f)
+                                       (app (var g) (var x)))))) (var f)) (var f)))) (lam y (+ (var y) 1)))"
+    =>
+    "(lam ?x (+ (var ?x) 8))"
+}
+
 
 // Times out with 5 doubles
 // (with 4 doubles, takes ~20s)
