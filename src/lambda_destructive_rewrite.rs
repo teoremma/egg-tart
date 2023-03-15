@@ -151,37 +151,34 @@ fn is_const(v: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
 fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
     vec![
         // open term rules
-        rw!("if-true";  "(if  true ?then ?else)" => "?then"),
-        rw!("if-false"; "(if false ?then ?else)" => "?else"),
-        rw!("if-elim"; "(if (= (var ?x) ?e) ?then ?else)" => "?else"
-            if ConditionEqual::parse("(let ?x ?e ?then)", "(let ?x ?e ?else)")),
+        //   not destructive
         rw!("add-comm";  "(+ ?a ?b)"        => "(+ ?b ?a)"),
         rw!("add-assoc"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
         rw!("eq-comm";   "(= ?a ?b)"        => "(= ?b ?a)"),
+        //   destructive
+        rw!("if-true";  "(if  true ?then ?else)" => {
+            DestructiveRewrite {
+                original_pattern: "(if  true ?then ?else)".parse().unwrap(),
+                add_pattern: "?then".parse().unwrap(),
+            }
+        }),
+        rw!("if-false"; "(if false ?then ?else)" => {
+            DestructiveRewrite {
+                original_pattern: "(if false ?then ?else)".parse().unwrap(),
+                add_pattern: "?else".parse().unwrap(),
+            }
+        }),
+        rw!("if-elim"; "(if (= (var ?x) ?e) ?then ?else)" => {
+            DestructiveRewrite {
+                original_pattern: "(if (= (var ?x) ?e) ?then ?else)".parse().unwrap(),
+                add_pattern: "?else".parse().unwrap(),
+            }}
+            if ConditionEqual::parse("(let ?x ?e ?then)", "(let ?x ?e ?else)")
+        ),
         // subst rules
+        //   not destructive
         rw!("fix";      "(fix ?v ?e)"             => "(let ?v (fix ?v ?e) ?e)"),
-        // rw!("beta";     "(app (lam ?v ?body) ?e)" => "(let ?v ?e ?body)"),
-        // rw!("let-app";  "(let ?v ?e (app ?a ?b))" => "(app (let ?v ?e ?a) (let ?v ?e ?b))"),
-        // rw!("let-add";  "(let ?v ?e (+   ?a ?b))" => "(+   (let ?v ?e ?a) (let ?v ?e ?b))"),
-        // rw!("let-eq";   "(let ?v ?e (=   ?a ?b))" => "(=   (let ?v ?e ?a) (let ?v ?e ?b))"),
-        // rw!("let-const";
-        //     "(let ?v ?e ?c)" => "?c" if is_const(var("?c"))),
-        // rw!("let-if";
-        //     "(let ?v ?e (if ?cond ?then ?else))" =>
-        //     "(if (let ?v ?e ?cond) (let ?v ?e ?then) (let ?v ?e ?else))"
-        // ),
-        // rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => "?e"),
-        // rw!("let-var-diff"; "(let ?v1 ?e (var ?v2))" => "(var ?v2)"
-        //     if is_not_same_var(var("?v1"), var("?v2"))),
-        // rw!("let-lam-same"; "(let ?v1 ?e (lam ?v1 ?body))" => "(lam ?v1 ?body)"),
-        // rw!("let-lam-diff";
-        //     "(let ?v1 ?e (lam ?v2 ?body))" =>
-        //     { CaptureAvoid {
-        //         fresh: var("?fresh"), v2: var("?v2"), e: var("?e"),
-        //         if_not_free: "(lam ?v2 (let ?v1 ?e ?body))".parse().unwrap(),
-        //         if_free: "(lam ?fresh (let ?v1 ?e (let ?v2 (var ?fresh) ?body)))".parse().unwrap(),
-        //     }}
-        //     if is_not_same_var(var("?v1"), var("?v2"))),
+        //   destructive
         rw!("beta";     "(app (lam ?v ?body) ?e)" => {
             DestructiveRewrite {
                 original_pattern: "(app (lam ?v ?body) ?e)".parse().unwrap(),
@@ -252,7 +249,7 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
 }
 
 // TODO: this and its applier can probably be generalized over languages L that
-// implement apply_subst_and_flatten
+// implement match_enode
 struct DestructiveRewrite {
     original_pattern: Pattern<Lambda>,
     add_pattern: Pattern<Lambda>,
@@ -267,8 +264,10 @@ impl Applier<Lambda, LambdaAnalysis> for DestructiveRewrite {
         searcher_ast: Option<&PatternAst<Lambda>>,
         rule_name: Symbol,
     ) -> Vec<Id> {
-        let ids = self.add_pattern.apply_one(egraph, eclass, subst, searcher_ast, rule_name);
-        prune_enodes_matching(egraph, &self.original_pattern.ast, subst, &eclass);
+        let mut ids = self.add_pattern.apply_one(egraph, eclass, subst, searcher_ast, rule_name);
+        if prune_enodes_matching(egraph, &self.original_pattern.ast, subst, &eclass, rule_name) {
+            ids.push(eclass);
+        }
         ids
     }
 }
@@ -280,23 +279,43 @@ impl Applier<Lambda, LambdaAnalysis> for DestructiveRewrite {
 /// between passing around clones of a HashMap/HashSet everywhere and using a
 /// single mutable HashMap is minimal in my testing (0.2s for a test taking 9s -
 /// although this was just a single test).
-fn prune_enodes_matching(egraph: &mut egg::EGraph<Lambda, LambdaAnalysis>, rec_expr: &RecExpr<ENodeOrVar<Lambda>>, subst: &Subst, eclass: &Id) {
+fn prune_enodes_matching(egraph: &mut egg::EGraph<Lambda, LambdaAnalysis>, rec_expr: &RecExpr<ENodeOrVar<Lambda>>, subst: &Subst, eclass: &Id, rule_name: Symbol) -> bool {
+    let dr_enabled = match rule_name.as_str() {
+        "if-true" => false,
+        "if-false" => false,
+        "if-elim" => false,
+        "beta" => false,
+        "let-app" => false,
+        "let-add" => false,
+        "let-eq" => false,
+        "let-const" => false,
+        "let-if" => false,
+        "let-var-same" => false,
+        "let-var-diff" => false,
+        "let-lam-same" => false,
+        "let-lam-diff" => false,
+        _ => false,
+    };
+    if !dr_enabled {
+        return false;
+    }
     let mut memo = HashMap::default();
     let rec_expr_id: Id = (rec_expr.as_ref().len() - 1).into();
     // Handles cycles - if we get back here then it matches.
     memo.insert((rec_expr_id, *eclass), true);
-    let filtered_nodes = egraph[*eclass].nodes
-        .clone()
+    let original_len = egraph[*eclass].nodes.len();
+    egraph[*eclass].nodes = egraph[*eclass].nodes
+        .to_owned()
         .into_iter()
         .filter(|node| {
-            let res = match_enode(egraph, &rec_expr, &rec_expr_id, subst, node,  &mut memo);
-            if res {
-                // println!("{} filtering node {:?}", rule_name, node)
-            }
+            let res = match_enode(egraph, &rec_expr, &rec_expr_id, subst, node, &mut memo);
+            // if res {
+            //     // println!("{} filtering node {:?}", rule_name, node)
+            // }
             !res
         })
         .collect();
-    egraph[*eclass].nodes = filtered_nodes;
+    original_len > egraph[*eclass].nodes.len()
 }
 
 /// This function recursively traverses the rec_expr and enode in lock step. If
@@ -389,7 +408,7 @@ impl Applier<Lambda, LambdaAnalysis> for CaptureAvoid {
         let e = subst[self.e];
         let v2 = subst[self.v2];
         let v2_free_in_e = egraph[e].data.free.contains(&v2);
-        let ids = if v2_free_in_e {
+        let mut ids = if v2_free_in_e {
             let mut subst = subst.clone();
             let sym = Lambda::Symbol(format!("_{}", eclass).into());
             subst.insert(self.fresh, egraph.add(sym));
@@ -399,7 +418,9 @@ impl Applier<Lambda, LambdaAnalysis> for CaptureAvoid {
             self.if_not_free
                 .apply_one(egraph, eclass, subst, searcher_ast, rule_name)
         };
-        prune_enodes_matching(egraph, &self.original_pattern.ast, subst, &eclass);
+        if prune_enodes_matching(egraph, &self.original_pattern.ast, subst, &eclass, rule_name) {
+            ids.push(eclass);
+        }
         ids
     }
 }
@@ -629,6 +650,14 @@ egg::test_fn! {
      (app (app (var repeat)
                (var add1))
           2))))"
+    =>
+    "(lam ?x (+ (var ?x) 2))",
+    "(lam ?x (+ 1 (let x (var ?x) (+ 1 (var ?x)))))"
+}
+
+egg::test_fn! {
+    lambda_dr_function_repeat_end, rules(),
+    "(lam x (+ 1 (let x (var x) (+ 1 (var x)))))"
     =>
     "(lam ?x (+ (var ?x) 2))"
 }
