@@ -281,17 +281,17 @@ impl Applier<Lambda, LambdaAnalysis> for DestructiveRewrite {
 /// although this was just a single test).
 fn prune_enodes_matching(egraph: &mut egg::EGraph<Lambda, LambdaAnalysis>, rec_expr: &RecExpr<ENodeOrVar<Lambda>>, subst: &Subst, eclass: &Id, rule_name: Symbol) -> bool {
     let dr_enabled = match rule_name.as_str() {
-        "if-true" => false,
-        "if-false" => false,
-        "if-elim" => false,
+        "if-true" => true,
+        "if-false" => true,
+        "if-elim" => true,
         "beta" => false,
-        "let-app" => false,
-        "let-add" => false,
-        "let-eq" => false,
-        "let-const" => false,
+        "let-app" => true,
+        "let-add" => true,
+        "let-eq" => true,
+        "let-const" => true,
         "let-if" => false,
-        "let-var-same" => false,
-        "let-var-diff" => false,
+        "let-var-same" => true,
+        "let-var-diff" => true,
         "let-lam-same" => false,
         "let-lam-diff" => false,
         _ => false,
@@ -304,6 +304,10 @@ fn prune_enodes_matching(egraph: &mut egg::EGraph<Lambda, LambdaAnalysis>, rec_e
     // Handles cycles - if we get back here then it matches.
     memo.insert((rec_expr_id, *eclass), true);
     let original_len = egraph[*eclass].nodes.len();
+
+    if original_len == 1 {
+        return false;
+    }
     egraph[*eclass].nodes = egraph[*eclass].nodes
         .to_owned()
         .into_iter()
