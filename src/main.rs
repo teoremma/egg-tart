@@ -1,3 +1,4 @@
+mod debruijn;
 mod lambda;
 // mod reps;
 mod reps;
