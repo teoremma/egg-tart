@@ -1,3 +1,5 @@
+use std::vec;
+
 use egg::{rewrite as rw, *};
 use fxhash::FxHashSet as HashSet;
 
@@ -15,6 +17,8 @@ define_language! {
         "lam" = Lambda([Id; 2]),
         "let" = Let([Id; 3]),
         "fix" = Fix([Id; 2]),
+        // sub is equivalent to let, but used only for intermediate steps
+        "sub" = Sub([Id; 3]),
 
         "if" = If([Id; 3]),
 
@@ -29,14 +33,19 @@ impl Lambda {
             _ => None,
         }
     }
+
+    fn is_sub(&self) -> bool {
+        if let Lambda::Sub(_) = self { true }
+        else { false }
+    }
 }
 
 type EGraph = egg::EGraph<Lambda, LambdaAnalysis>;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct LambdaAnalysis;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Data {
     free: HashSet<Id>,
     constant: Option<(Lambda, PatternAst<Lambda>)>,
@@ -126,6 +135,106 @@ fn is_const(v: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
     move |egraph, _, subst| egraph[subst[v]].data.constant.is_some()
 }
 
+struct CaptureAvoid {
+    fresh: Var,
+    v2: Var,
+    e: Var,
+    if_not_free: Pattern<Lambda>,
+    if_free: Pattern<Lambda>,
+}
+
+impl Applier<Lambda, LambdaAnalysis> for CaptureAvoid {
+    fn apply_one(
+        &self,
+        egraph: &mut EGraph,
+        eclass: Id,
+        subst: &Subst,
+        searcher_ast: Option<&PatternAst<Lambda>>,
+        rule_name: Symbol,
+    ) -> Vec<Id> {
+        let e = subst[self.e];
+        let v2 = subst[self.v2];
+        let v2_free_in_e = egraph[e].data.free.contains(&v2);
+        if v2_free_in_e {
+            let mut subst = subst.clone();
+            let sym = Lambda::Symbol(format!("_{}", eclass).into());
+            subst.insert(self.fresh, egraph.add(sym));
+            self.if_free
+                .apply_one(egraph, eclass, &subst, searcher_ast, rule_name)
+        } else {
+            self.if_not_free
+                .apply_one(egraph, eclass, subst, searcher_ast, rule_name)
+        }
+    }
+}
+
+
+fn main_rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
+    vec![
+        rw!("if-true";  "(if  true ?then ?else)" => "?then"),
+        rw!("if-false"; "(if false ?then ?else)" => "?else"),
+        rw!("if-elim"; "(if (= (var ?x) ?e) ?then ?else)" => "?else"
+            if ConditionEqual::parse("(let ?x ?e ?then)", "(let ?x ?e ?else)")),
+        rw!("add-comm";  "(+ ?a ?b)"        => "(+ ?b ?a)"),
+        rw!("add-assoc"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
+        rw!("eq-comm";   "(= ?a ?b)"        => "(= ?b ?a)"),
+
+        // TODO: compare rewriting fix to let or sub
+        // rw!("fix";      "(fix ?v ?e)"             => "(sub ?v (fix ?v ?e) ?e)"),
+        rw!("fix";      "(fix ?v ?e)"             => "(let ?v (fix ?v ?e) ?e)"),
+        rw!("beta";     "(app (lam ?v ?body) ?e)" => "(sub ?v ?e ?body)"),
+
+        // let rules introduce sub now
+        rw!("let-app";  "(let ?v ?e (app ?a ?b))" => "(app (sub ?v ?e ?a) (sub ?v ?e ?b))"),
+        rw!("let-add";  "(let ?v ?e (+   ?a ?b))" => "(+   (sub ?v ?e ?a) (sub ?v ?e ?b))"),
+        rw!("let-eq";   "(let ?v ?e (=   ?a ?b))" => "(=   (sub ?v ?e ?a) (sub ?v ?e ?b))"),
+        rw!("let-const";
+            "(let ?v ?e ?c)" => "?c" if is_const(var("?c"))),
+        rw!("let-if";
+            "(let ?v ?e (if ?cond ?then ?else))" =>
+            "(if (sub ?v ?e ?cond) (sub ?v ?e ?then) (sub ?v ?e ?else))"
+        ),
+        rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => "?e"),
+        rw!("let-var-diff"; "(let ?v1 ?e (var ?v2))" => "(var ?v2)"
+            if is_not_same_var(var("?v1"), var("?v2"))),
+        rw!("let-lam-same"; "(let ?v1 ?e (lam ?v1 ?body))" => "(lam ?v1 ?body)"),
+        rw!("let-lam-diff";
+            "(let ?v1 ?e (lam ?v2 ?body))" =>
+            { CaptureAvoid {
+                fresh: var("?fresh"), v2: var("?v2"), e: var("?e"),
+                if_not_free: "(lam ?v2 (sub ?v1 ?e ?body))".parse().unwrap(),
+                if_free: "(lam ?fresh (sub ?v1 ?e (sub ?v2 (var ?fresh) ?body)))".parse().unwrap(),
+            }}
+            if is_not_same_var(var("?v1"), var("?v2"))),
+    ]
+}
+
+fn subst_rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
+   vec![
+        rw!("sub-app";  "(sub ?v ?e (app ?a ?b))" => "(app (sub ?v ?e ?a) (sub ?v ?e ?b))"),
+        rw!("sub-add";  "(sub ?v ?e (+   ?a ?b))" => "(+   (sub ?v ?e ?a) (sub ?v ?e ?b))"),
+        rw!("sub-eq";   "(sub ?v ?e (=   ?a ?b))" => "(=   (sub ?v ?e ?a) (sub ?v ?e ?b))"),
+        rw!("sub-const";
+            "(sub ?v ?e ?c)" => "?c" if is_const(var("?c"))),
+        rw!("sub-if";
+            "(sub ?v ?e (if ?cond ?then ?else))" =>
+            "(if (sub ?v ?e ?cond) (sub ?v ?e ?then) (sub ?v ?e ?else))"
+        ),
+        rw!("sub-var-same"; "(sub ?v1 ?e (var ?v1))" => "?e"),
+        rw!("sub-var-diff"; "(sub ?v1 ?e (var ?v2))" => "(var ?v2)"
+            if is_not_same_var(var("?v1"), var("?v2"))),
+        rw!("sub-lam-same"; "(sub ?v1 ?e (lam ?v1 ?body))" => "(lam ?v1 ?body)"),
+        rw!("sub-lam-diff";
+            "(sub ?v1 ?e (lam ?v2 ?body))" =>
+            { CaptureAvoid {
+                fresh: var("?fresh"), v2: var("?v2"), e: var("?e"),
+                if_not_free: "(lam ?v2 (sub ?v1 ?e ?body))".parse().unwrap(),
+                if_free: "(lam ?fresh (sub ?v1 ?e (sub ?v2 (var ?fresh) ?body)))".parse().unwrap(),
+            }}
+            if is_not_same_var(var("?v1"), var("?v2"))),
+   ] 
+}
+
 fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
     vec![
         // open term rules
@@ -163,37 +272,133 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
     ]
 }
 
-struct CaptureAvoid {
-    fresh: Var,
-    v2: Var,
-    e: Var,
-    if_not_free: Pattern<Lambda>,
-    if_free: Pattern<Lambda>,
-}
 
-impl Applier<Lambda, LambdaAnalysis> for CaptureAvoid {
-    fn apply_one(
-        &self,
-        egraph: &mut EGraph,
-        eclass: Id,
-        subst: &Subst,
-        searcher_ast: Option<&PatternAst<Lambda>>,
-        rule_name: Symbol,
-    ) -> Vec<Id> {
-        let e = subst[self.e];
-        let v2 = subst[self.v2];
-        let v2_free_in_e = egraph[e].data.free.contains(&v2);
-        if v2_free_in_e {
-            let mut subst = subst.clone();
-            let sym = Lambda::Symbol(format!("_{}", eclass).into());
-            subst.insert(self.fresh, egraph.add(sym));
-            self.if_free
-                .apply_one(egraph, eclass, &subst, searcher_ast, rule_name)
+// Returns a new runner with goal checking for a given eclass
+fn runner_with_goals(eclass: Id, goals: Vec<Pattern<Lambda>>) -> Runner<Lambda, LambdaAnalysis> {
+    let node_limit = 1000000;
+    let iter_limit = 10000;
+    let time_limit = 10;
+
+    let mut runner = Runner::default()
+        .with_node_limit(node_limit)
+        .with_iter_limit(iter_limit)
+        .with_time_limit(std::time::Duration::from_secs(time_limit));
+    runner = runner.with_hook(move |r| {
+        if goals
+            .iter()
+            .all(|g: &Pattern<_>| g.search_eclass(&r.egraph, eclass).is_some())
+        {
+            Err("Proved all goals".into())
         } else {
-            self.if_not_free
-                .apply_one(egraph, eclass, subst, searcher_ast, rule_name)
+            Ok(())
+        }
+    });
+    runner
+}
+// basically a reimplementation of egg::test::test_runner
+fn test_phased_runners(
+    start: RecExpr<Lambda>,
+    goals: &[Pattern<Lambda>]
+) {
+
+    let mut egraph = EGraph::new(LambdaAnalysis);
+    let root_id = egraph.add_expr(&start);
+    let root_id = egraph.find(root_id);
+    let goals_vec = goals.to_vec();
+
+    // alternate between main and subst runners
+    loop {
+        println!("Running main runner");
+        let mut main_runner = runner_with_goals(root_id , goals_vec.clone());
+        main_runner = main_runner.with_egraph(egraph.clone()).run(&main_rules());
+        println!("{report}", report = main_runner.report());
+        if let StopReason::Other(_) = main_runner.stop_reason.unwrap() { break }
+        egraph = main_runner.egraph;
+        let (_, best) = Extractor::new(&egraph, AstSize).find_best(root_id);
+        println!("Best so far: {}", best.pretty(80));
+        
+        println!("Running subst runner");
+        let mut subst_runner = runner_with_goals(root_id , goals_vec.clone());
+        subst_runner = subst_runner.with_egraph(egraph.clone()).run(&subst_rules());
+        println!("{report}", report = subst_runner.report());
+        if let StopReason::Other(_) = subst_runner.stop_reason.unwrap() { break }
+        egraph = subst_runner.egraph;
+        let (_, best) = Extractor::new(&egraph, AstSize).find_best(root_id);
+        println!("Best so far: {}", best.pretty(80));
+
+        for eclass in egraph.classes_mut() {
+            // ugly af :|
+            let filtered_enodes: Vec<Lambda> = eclass.nodes.clone().into_iter().filter(|node| !node.is_sub()).collect();
+            if !filtered_enodes.is_empty() {
+                eclass.nodes = filtered_enodes;
+            }
         }
     }
+
+    // Alternate between main_runner and sub_runner, deleting sub enodes in the process
+}
+
+macro_rules! phased_test_fn {
+    (
+        $name:ident,
+        $start:literal
+        =>
+        $($goal:literal),+ $(,)?
+    ) => {
+    #[test]
+    pub fn $name() {
+        test_phased_runners(
+            $start.parse().unwrap(),
+            &[$( $goal.parse().unwrap() ),+],
+        )
+    }
+    };
+}
+
+phased_test_fn! {
+    phased_lambda_under,
+    "(lam x (+ 4
+               (app (lam y (var y))
+                    4)))"
+    =>
+    "(lam x 8))"
+}
+
+
+phased_test_fn! {
+    phased_lambda_compose,
+    "(let compose (lam f (lam g (lam x (app (var f)
+                                       (app (var g) (var x))))))
+     (let add1 (lam y (+ (var y) 1))
+     (app (app (var compose) (var add1)) (var add1))))"
+    =>
+    "(lam ?x (+ 1
+                (app (lam ?y (+ 1 (var ?y)))
+                     (var ?x))))",
+    "(lam ?x (+ (var ?x) 2))"
+}
+
+// Times out with 8 doubles
+// (with 7 doubles, takes ~20s)
+// (sketch guided takes ~90s with 4 doubles)
+phased_test_fn! {
+    lambda_dr_compose_many_many_1,
+    "(let compose (lam f (lam g (lam x (app (var f)
+                                       (app (var g) (var x))))))
+     (let double (lam f (app (app (var compose) (var f)) (var f)))
+     (let add1 (lam y (+ (var y) 1))
+     (app (var double)
+     (app (var double)
+     (app (var double)
+     (app (var double)
+     (app (var double)
+     (app (var double)
+     (app (var double)
+     (app (var double)
+     (app (var double)
+         (var add1)))))))))))))"
+    =>
+    "(lam ?x (+ (var ?x) 512))"
 }
 
 egg::test_fn! {
