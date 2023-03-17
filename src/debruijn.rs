@@ -2,6 +2,8 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 use egg::{rewrite as rw, *};
+use fxhash::FxHashSet as HashSet;
+use fxhash::FxHashMap as HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct DeBruijnIndex(u32);
@@ -44,6 +46,7 @@ define_language! {
         "if" = If([Id; 3]),
 
         "shift" = Shift([Id; 1]),
+        "nop" = Nop([Id; 1]),
 
         Index(DeBruijnIndex),
     }
@@ -56,6 +59,27 @@ impl DeBruijn {
             _ => None,
         }
     }
+
+    fn increment_id(&self, increment: usize) -> Self {
+        match self {
+            DeBruijn::Add([id1, id2]) => DeBruijn::Add([increment_id(*id1, increment), increment_id(*id2, increment)]),
+            DeBruijn::Eq([id1, id2]) => DeBruijn::Eq([increment_id(*id1, increment), increment_id(*id2, increment)]),
+            DeBruijn::App([id1, id2]) => DeBruijn::App([increment_id(*id1, increment), increment_id(*id2, increment)]),
+            DeBruijn::Lam([id]) => DeBruijn::Lam([increment_id(*id, increment)]),
+            DeBruijn::Let([id1, id2]) =>
+                DeBruijn::Let([increment_id(*id1, increment), increment_id(*id2, increment)]),
+            DeBruijn::If([id1, id2, id3]) =>
+                DeBruijn::If([increment_id(*id1, increment), increment_id(*id2, increment), increment_id(*id3, increment)]),
+            DeBruijn::Shift([id]) => DeBruijn::Shift([increment_id(*id, increment)]),
+            DeBruijn::Nop([id]) => DeBruijn::Nop([increment_id(*id, increment)]),
+            DeBruijn::Bool(_) | DeBruijn::Num(_) | DeBruijn::Index(_) => self.to_owned()
+        }
+    }
+}
+
+fn increment_id(id: Id, increment: usize) -> Id {
+    let id_as_usize: usize = id.into();
+    (id_as_usize + increment).into()
 }
 
 type EGraph = egg::EGraph<DeBruijn, DeBruijnAnalysis>;
@@ -164,25 +188,134 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
         // subst rules
         // rw!("fix";      "(fix ?v ?e)"             => "(let ?v (fix ?v ?e) ?e)"),
         // rw!("beta";     "(app (lam ?v ?body) ?e)" => "(let ?v ?e ?body)"),
-        rw!("beta";     "(app (lam ?body) ?e)" => "(let ?e ?body)"),
-        rw!("shift-const"; "(shift ?c)" => "?c" if is_const(var("?c"))),
-        rw!("shift-apply"; "(shift (app ?a ?b))" => "(app (shift ?a) (shift ?b))"),
-        rw!("let-app";  "(let ?e (app ?a ?b))" => "(app (let ?e ?a) (let ?e ?b))"),
-        rw!("let-add";  "(let ?e (+   ?a ?b))" => "(+   (let ?e ?a) (let ?e ?b))"),
-        rw!("let-eq";   "(let ?e (=   ?a ?b))" => "(=   (let ?e ?a) (let ?e ?b))"),
-        rw!("let-const";
-            "(let ?e ?c)" => "?c" if is_const(var("?c"))),
-        rw!("let-if";
-            "(let ?e (if ?cond ?then ?else))" =>
-            "(if (let ?e ?cond) (let ?e ?then) (let ?e ?else))"
-        ),
-        // rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => "?e"),
-        rw!("let-var-same"; "(let ?e @0)" => "?e"),
-        // rw!("let-var-diff"; "(let ?v1 ?e (var ?v2))" => "(var ?v2)"
-        //     if is_not_same_var(var("?v1"), var("?v2"))),
-        rw!("let-var-diff"; "(let ?e (shift ?body))" => "?body"),
-        rw!("abc"; "(app (let ?v ?e) ?body)" => "(app (let ?v ?e) (let ?v (shift ?body)))"),
+        rw!("let";      "(let ?e ?body)" => "(app (lam ?body) ?e)"),
+        rw!("beta";     "(app (lam ?body) ?e)" => {
+            SketchGuidedBetaReduction {
+                e: "?e".parse().unwrap(),
+                body: "?body".parse().unwrap(),
+            }
+        }),
+        // rw!("shift-const"; "(shift ?c)" => "?c" if is_const(var("?c"))),
+        // rw!("shift-apply"; "(shift (app ?a ?b))" => "(app (shift ?a) (shift ?b))"),
+        // rw!("let-app";  "(let ?e (app ?a ?b))" => "(app (let ?e ?a) (let ?e ?b))"),
+        // rw!("let-add";  "(let ?e (+   ?a ?b))" => "(+   (let ?e ?a) (let ?e ?b))"),
+        // rw!("let-eq";   "(let ?e (=   ?a ?b))" => "(=   (let ?e ?a) (let ?e ?b))"),
+        // rw!("let-const";
+        //     "(let ?e ?c)" => "?c" if is_const(var("?c"))),
+        // rw!("let-if";
+        //     "(let ?e (if ?cond ?then ?else))" =>
+        //     "(if (let ?e ?cond) (let ?e ?then) (let ?e ?else))"
+        // ),
+        // // rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => "?e"),
+        // rw!("let-var-same"; "(let ?e @0)" => "?e"),
+        // // rw!("let-var-diff"; "(let ?v1 ?e (var ?v2))" => "(var ?v2)"
+        // //     if is_not_same_var(var("?v1"), var("?v2"))),
+        // rw!("let-var-diff"; "(let ?e (shift ?body))" => "?body"),
+        // rw!("abc"; "(app (let ?v ?e) ?body)" => "(app (let ?v ?e) (let ?v (shift ?body)))"),
+        rw!("nop"; "(nop ?x)" => "?x"),
     ]
+}
+
+fn substitute_rec_expr(rec_expr: &mut RecExpr<DeBruijn>, seen: &mut HashSet<Id>, id: Id, subst_id: Id, target_index: u32) {
+    if seen.contains(&id) {
+        return;
+    }
+    seen.insert(id);
+    match rec_expr[id] {
+        DeBruijn::Index(DeBruijnIndex(idx)) => {
+            // match
+            if idx == target_index {
+                rec_expr[id] = rec_expr[subst_id].to_owned();
+            // unshift
+            } else if idx > target_index {
+                rec_expr[id] = DeBruijn::Index(DeBruijnIndex(idx - 1));
+            }
+        }
+        DeBruijn::Shift([id]) => {
+            // Substitutions cancel out shifts - we could avoid generating a new
+            // term by pointing the parent to `id` but there's some edge-case
+            // logic if `Shift` is the root. Let's do the stupid simple thing
+            // for now.
+            rec_expr[id] = DeBruijn::Nop([id]);
+            if target_index != 0 {
+                substitute_rec_expr(rec_expr, seen, id, subst_id, target_index - 1);
+            }
+        }
+        DeBruijn::Lam([id]) => {
+            substitute_rec_expr(rec_expr, seen, id, subst_id, target_index + 1);
+        }
+        DeBruijn::Let([id1, id2]) => {
+            substitute_rec_expr(rec_expr, seen, id1, subst_id, target_index);
+            substitute_rec_expr(rec_expr, seen, id2, subst_id, target_index + 1);
+        }
+        DeBruijn::Add([id1, id2]) | DeBruijn::Eq([id1, id2]) | DeBruijn::App([id1, id2]) => {
+            substitute_rec_expr(rec_expr, seen, id1, subst_id, target_index);
+            substitute_rec_expr(rec_expr, seen, id2, subst_id, target_index);
+        }
+        DeBruijn::Nop([id]) => {
+            substitute_rec_expr(rec_expr, seen, id, subst_id, target_index);
+        }
+        DeBruijn::If([id1, id2, id3]) => {
+            substitute_rec_expr(rec_expr, seen, id1, subst_id, target_index);
+            substitute_rec_expr(rec_expr, seen, id2, subst_id, target_index);
+            substitute_rec_expr(rec_expr, seen, id3, subst_id, target_index);
+        }
+        DeBruijn::Bool(_) | DeBruijn::Num(_) => {
+            // Nothing to do
+        }
+    }
+}
+
+struct SketchGuidedBetaReduction {
+    e: Var,
+    body: Var
+}
+
+impl Applier<DeBruijn, DeBruijnAnalysis> for SketchGuidedBetaReduction {
+    fn apply_one(
+        &self,
+        egraph: &mut EGraph,
+        eclass: Id,
+        subst: &Subst,
+        _searcher_ast: Option<&PatternAst<DeBruijn>>,
+        _rule_name: Symbol,
+    ) -> Vec<Id> {
+        let e = subst[self.e];
+        let body = subst[self.body];
+        let extractor = Extractor::new(&egraph, AstSize);
+        let (_, best_e) = extractor.find_best(e);
+        let (_, best_body) = extractor.find_best(body);
+        let e_rec_expr_len = best_e.as_ref().len();
+        let e_id = e_rec_expr_len - 1;
+        // Adjust the ids so we can put them at the end of the best_e rec expr.
+        let adjusted_body_rec_expr: Vec<DeBruijn> = best_body
+            .as_ref()
+            .into_iter()
+            .map(|expr| expr.increment_id(e_rec_expr_len))
+            .collect();
+        // Put both body and e into a single rec expr.
+        let body_and_e_rec_expr: RecExpr<DeBruijn> = best_e
+            .as_ref()
+            .into_iter()
+            .cloned()
+            .chain(adjusted_body_rec_expr)
+            .collect::<Vec<DeBruijn>>()
+            .into();
+        let body_id = body_and_e_rec_expr.as_ref().len() - 1;
+        println!("prev_expr: {}", body_and_e_rec_expr);
+        let mut new_rec_expr = body_and_e_rec_expr.clone();
+        // println!("sym: {:?}, body: {}, e: {}", sym_to_replace, best_body, best_e);//, body_and_e_rec_expr.as_ref());
+        substitute_rec_expr(&mut new_rec_expr, &mut HashSet::default(), body_id.into(), e_id.into(), 0);
+        println!("new_expr: {}", new_rec_expr);
+        // println!("end expr: {}", new_rec_expr);
+        // for class in egraph.classes() {
+        //     println!("id: {:?}, nodes: {:?}", class.id, class.nodes);
+        // }
+        // panic!();
+        let new_id = egraph.add_expr(&new_rec_expr);
+        egraph.union(eclass, new_id);
+        vec!(new_id) // + changed_ids
+    }
 }
 
 egg::test_fn! {
@@ -206,5 +339,23 @@ egg::test_fn! {
 
 egg::test_fn! {
     db_double_app, rules(),
-    "(app (app (lam (lam (@1))) 1) 2)" => "(app (let 1 lam @1) (let 1 (shift 2)))",
+    "(app (app (lam (lam (@1))) 1) 2)" => "2",
+}
+
+egg::test_fn! {
+    db_compose, rules(),
+    "(let (lam (lam (lam (app @2 (app @1 @0)))))
+     (let (lam (+ @0 1))
+     (app (app @1 @0) @0)))"
+    =>
+    "(lam (+ @0 2))"
+}
+
+egg::test_fn! {
+    db_compose_2, rules(),
+    "(let (lam (lam (lam (app @2 (app @1 @0)))))
+     (let (lam (+ @0 1))
+     (app (app (app @1 @0) @0) 1)))"
+    =>
+    "3"
 }
