@@ -162,7 +162,7 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
         rw!("add-assoc"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
         rw!("eq-comm";   "(= ?a ?b)"        => "(= ?b ?a)"),
         // subst rules
-        rw!("fix";      "(fix ?v ?e)"             => "(let (fix ?v ?e) ?e)"),
+        // rw!("fix";      "(fix ?v ?e)"             => "(let (fix ?v ?e) ?e)"),
         // rw!("beta";     "(app (lam ?v ?body) ?e)" => "(let ?v ?e ?body)"),
         rw!("beta";     "(app (lam ?body) ?e)" => "(let ?e ?body)"),
         rw!("shift-const"; "(shift ?c)" => "?c" if is_const(var("?c"))),
@@ -198,9 +198,9 @@ egg::test_fn! {
 
 egg::test_fn! {
     db_simple_let2, rules(),
-    "(let 4 (+ 1 @0))"
+    "(let 4 (lam 1))"
     =>
-    "5",
+    "1",
 }
 
 egg::test_fn! {
@@ -210,5 +210,14 @@ egg::test_fn! {
 
 egg::test_fn! {
     db_double_app, rules(),
-    "(app (app (lam (lam (@1))) 1) 2)" => "1",
+    "(app (app (lam (lam (shift (@0)))) 1) 2)" => "1",
+}
+
+egg::test_fn! {
+    db_compose_peano, rules(),
+    "(let (lam (lam (lam (app (shift (shift @0)) (app (shift @0) @0)))))
+     (let (lam (+ @0 1))
+     (app (app (shift @0) @0) @0)))"
+    =>
+    "(lam (+ @0 2))"
 }
