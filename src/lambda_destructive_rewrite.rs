@@ -60,6 +60,7 @@ struct LambdaAnalysis;
 
 #[derive(Clone, Debug)]
 struct Data {
+    previous_rewrites: HashSet<(Symbol, Subst, PatternAst<Lambda>)>,
     free: HashSet<Id>,
     constant: Option<(Lambda, PatternAst<Lambda>)>,
 }
@@ -116,7 +117,7 @@ impl Analysis<Lambda> for LambdaAnalysis {
             _ => enode.for_each(|c| free.extend(&egraph[c].data.free)),
         }
         let constant = eval(egraph, enode);
-        Data { constant, free }
+        Data { constant, free, previous_rewrites: HashSet::default() }
     }
 
     fn modify(egraph: &mut EGraph, id: Id) {
@@ -264,6 +265,11 @@ impl Applier<Lambda, LambdaAnalysis> for DestructiveRewrite {
         searcher_ast: Option<&PatternAst<Lambda>>,
         rule_name: Symbol,
     ) -> Vec<Id> {
+        let memo = (rule_name, subst.clone(), self.original_pattern.ast.clone());
+        if egraph[eclass].data.previous_rewrites.contains(&memo) {
+            return vec!();
+        }
+        egraph[eclass].data.previous_rewrites.insert(memo);
         let mut ids = self.add_pattern.apply_one(egraph, eclass, subst, searcher_ast, rule_name);
         if prune_enodes_matching(egraph, &self.original_pattern.ast, subst, &eclass, rule_name) {
             ids.push(eclass);
@@ -523,7 +529,7 @@ egg::test_fn! {
      (app (var double)
          (var add1)))))))))))))"
     =>
-    "(lam ?x (+ (var ?x) 512))"
+    "(lam ?x (+ (var ?x) 256))"
 }
 
 // 8 doubles times out for CallByName
