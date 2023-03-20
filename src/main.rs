@@ -1,4 +1,5 @@
 mod debruijn;
+mod lambda_baseline;
 mod lambda;
 // mod reps;
 mod reps;
