@@ -196,6 +196,40 @@ impl Applier<Lambda, LambdaAnalysis> for CaptureAvoid {
     }
 }
 
+#[test]
+fn simple_example() {
+    // let start = "(app (lam comp (app (lam inc (app (app (var comp) (var inc)) (var inc) )) 
+    //                                  (lam y (+ (var y) 1)))) 
+    //                   (lam f (lam g (lam x (app (var f) 
+    //                                             (app (var g) (var x)))))))".parse().unwrap();
+    // let goal = "(lam ?x (+ (var ?x) 2))".parse().unwrap(); 
+
+    // // Simple 1
+    // let start = "(app (lam x (+ (var x) (var x))) 2)".parse().unwrap();
+    // let goal = "4".parse().unwrap();
+
+    // // Id 1
+    // let start = "(app (lam x (var x)) (var x))".parse().unwrap();
+    // let goal = "(var x)".parse().unwrap();
+
+    // Id 1
+    let start = "(app (lam y (var y)) (var x))".parse().unwrap();
+    let goal = "(var x)".parse().unwrap();
+
+    let mut runner: Runner<Lambda, LambdaAnalysis> = Runner::default();
+    runner = runner.with_expr(&start);
+    let id = runner.egraph.find(*runner.roots.last().unwrap());
+    let before_path = "dots/simple_before.png";
+    runner.egraph.dot().to_png(before_path).unwrap();
+
+    runner = runner.run(&rules());
+    println!("{report}", report = runner.report());
+    runner.egraph.check_goals(id, &[goal]);
+
+    let after_path = "dots/simple_after.png";
+    runner.egraph.dot().to_png(after_path).unwrap();
+}
+
 egg::test_fn! {
     lambda_under, rules(),
     "(lam x (+ 4

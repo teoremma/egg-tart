@@ -235,44 +235,6 @@ fn subst_rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
    ] 
 }
 
-fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
-    vec![
-        // open term rules
-        rw!("if-true";  "(if  true ?then ?else)" => "?then"),
-        rw!("if-false"; "(if false ?then ?else)" => "?else"),
-        rw!("if-elim"; "(if (= (var ?x) ?e) ?then ?else)" => "?else"
-            if ConditionEqual::parse("(let ?x ?e ?then)", "(let ?x ?e ?else)")),
-        rw!("add-comm";  "(+ ?a ?b)"        => "(+ ?b ?a)"),
-        rw!("add-assoc"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
-        rw!("eq-comm";   "(= ?a ?b)"        => "(= ?b ?a)"),
-        // subst rules
-        rw!("fix";      "(fix ?v ?e)"             => "(let ?v (fix ?v ?e) ?e)"),
-        rw!("beta";     "(app (lam ?v ?body) ?e)" => "(let ?v ?e ?body)"),
-        rw!("let-app";  "(let ?v ?e (app ?a ?b))" => "(app (let ?v ?e ?a) (let ?v ?e ?b))"),
-        rw!("let-add";  "(let ?v ?e (+   ?a ?b))" => "(+   (let ?v ?e ?a) (let ?v ?e ?b))"),
-        rw!("let-eq";   "(let ?v ?e (=   ?a ?b))" => "(=   (let ?v ?e ?a) (let ?v ?e ?b))"),
-        rw!("let-const";
-            "(let ?v ?e ?c)" => "?c" if is_const(var("?c"))),
-        rw!("let-if";
-            "(let ?v ?e (if ?cond ?then ?else))" =>
-            "(if (let ?v ?e ?cond) (let ?v ?e ?then) (let ?v ?e ?else))"
-        ),
-        rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => "?e"),
-        rw!("let-var-diff"; "(let ?v1 ?e (var ?v2))" => "(var ?v2)"
-            if is_not_same_var(var("?v1"), var("?v2"))),
-        rw!("let-lam-same"; "(let ?v1 ?e (lam ?v1 ?body))" => "(lam ?v1 ?body)"),
-        rw!("let-lam-diff";
-            "(let ?v1 ?e (lam ?v2 ?body))" =>
-            { CaptureAvoid {
-                fresh: var("?fresh"), v2: var("?v2"), e: var("?e"),
-                if_not_free: "(lam ?v2 (let ?v1 ?e ?body))".parse().unwrap(),
-                if_free: "(lam ?fresh (let ?v1 ?e (let ?v2 (var ?fresh) ?body)))".parse().unwrap(),
-            }}
-            if is_not_same_var(var("?v1"), var("?v2"))),
-    ]
-}
-
-
 // Returns a new runner with goal checking for a given eclass
 fn runner_with_goals(eclass: Id, goals: Vec<Pattern<Lambda>>) -> Runner<Lambda, LambdaAnalysis> {
     let node_limit = 1000000;
@@ -364,6 +326,26 @@ phased_test_fn! {
     "(lam x 8))"
 }
 
+phased_test_fn! {
+    phased_lambda_if_elim,
+    "(if (= (var a) (var b))
+         (+ (var a) (var a))
+         (+ (var a) (var b)))"
+    =>
+    "(+ (var a) (var b))"
+}
+
+phased_test_fn! {
+    phased_lambda_let_simple,
+    "(let x 0
+     (let y 1
+     (+ (var x) (var y))))"
+    =>
+    // "(let ?a 0
+    //  (+ (var ?a) 1))",
+    // "(+ 0 1)",
+    "1",
+}
 
 phased_test_fn! {
     phased_lambda_compose,
@@ -376,6 +358,75 @@ phased_test_fn! {
                 (app (lam ?y (+ 1 (var ?y)))
                      (var ?x))))",
     "(lam ?x (+ (var ?x) 2))"
+}
+
+phased_test_fn! {
+    phased_lambda_if_simple,
+    "(if (= 1 1) 7 9)" => "7"
+}
+
+phased_test_fn! {
+    phased_lambda_compose_many,
+    "(let compose (lam f (lam g (lam x (app (var f)
+                                       (app (var g) (var x))))))
+     (let add1 (lam y (+ (var y) 1))
+     (app (app (var compose) (var add1))
+          (app (app (var compose) (var add1))
+               (app (app (var compose) (var add1))
+                    (app (app (var compose) (var add1))
+                         (app (app (var compose) (var add1))
+                              (app (app (var compose) (var add1))
+                                   (var add1)))))))))"
+    =>
+    "(lam ?x (+ (var ?x) 7))"
+}
+
+phased_test_fn! {
+    phased_lambda_function_repeat,
+    "(let compose (lam f (lam g (lam x (app (var f)
+                                       (app (var g) (var x))))))
+     (let repeat (fix repeat (lam fun (lam n
+        (if (= (var n) 0)
+            (lam i (var i))
+            (app (app (var compose) (var fun))
+                 (app (app (var repeat)
+                           (var fun))
+                      (+ (var n) -1)))))))
+     (let add1 (lam y (+ (var y) 1))
+     (app (app (var repeat)
+               (var add1))
+          2))))"
+    =>
+    "(lam ?x (+ (var ?x) 2))",
+}
+
+phased_test_fn! {
+    phased_lambda_if,
+    "(let zeroone (lam x
+        (if (= (var x) 0)
+            0
+            1))
+        (+ (app (var zeroone) 0)
+        (app (var zeroone) 10)))"
+    =>
+    // "(+ (if false 0 1) (if true 0 1))",
+    // "(+ 1 0)",
+    "1",
+}
+
+phased_test_fn! {
+    phased_lambda_fib,
+    "(let fib (fix fib (lam n
+        (if (= (var n) 0)
+            0
+        (if (= (var n) 1)
+            1
+        (+ (app (var fib)
+                (+ (var n) -1))
+            (app (var fib)
+                (+ (var n) -2)))))))
+        (app (var fib) 4))"
+    => "3"
 }
 
 // Times out with 8 doubles
@@ -401,208 +452,10 @@ phased_test_fn! {
     "(lam ?x (+ (var ?x) 512))"
 }
 
-egg::test_fn! {
-    lambda_under, rules(),
-    "(lam x (+ 4
-               (app (lam y (var y))
-                    4)))"
+// failing for some reason
+phased_test_fn! {
+    phased_lambda_constant_fold,
+    "(lam x (+ 1 (+ 1 (var x))))"
     =>
-    // "(lam x (+ 4 (let y 4 (var y))))",
-    // "(lam x (+ 4 4))",
-    "(lam x 8))",
-}
-
-egg::test_fn! {
-    lambda_if_elim, rules(),
-    "(if (= (var a) (var b))
-         (+ (var a) (var a))
-         (+ (var a) (var b)))"
-    =>
-    "(+ (var a) (var b))"
-}
-
-egg::test_fn! {
-    lambda_let_simple, rules(),
-    "(let x 0
-     (let y 1
-     (+ (var x) (var y))))"
-    =>
-    // "(let ?a 0
-    //  (+ (var ?a) 1))",
-    // "(+ 0 1)",
-    "1",
-}
-
-egg::test_fn! {
-    #[should_panic(expected = "Could not prove goal 0")]
-    lambda_capture, rules(),
-    "(let x 1 (lam x (var x)))" => "(lam x 1)"
-}
-
-egg::test_fn! {
-    #[should_panic(expected = "Could not prove goal 0")]
-    lambda_capture_free, rules(),
-    "(let y (+ (var x) (var x)) (lam x (var y)))" => "(lam x (+ (var x) (var x)))"
-}
-
-egg::test_fn! {
-    #[should_panic(expected = "Could not prove goal 0")]
-    lambda_closure_not_seven, rules(),
-    "(let five 5
-     (let add-five (lam x (+ (var x) (var five)))
-     (let five 6
-     (app (var add-five) 1))))"
-    =>
-    "7"
-}
-
-egg::test_fn! {
-    lambda_compose, rules(),
-    "(let compose (lam f (lam g (lam x (app (var f)
-                                       (app (var g) (var x))))))
-     (let add1 (lam y (+ (var y) 1))
-     (app (app (var compose) (var add1)) (var add1))))"
-    =>
-    "(lam ?x (+ 1
-                (app (lam ?y (+ 1 (var ?y)))
-                     (var ?x))))",
-    "(lam ?x (+ (var ?x) 2))"
-}
-
-egg::test_fn! {
-    lambda_if_simple, rules(),
-    "(if (= 1 1) 7 9)" => "7"
-}
-
-egg::test_fn! {
-    lambda_compose_many, rules(),
-    "(let compose (lam f (lam g (lam x (app (var f)
-                                       (app (var g) (var x))))))
-     (let add1 (lam y (+ (var y) 1))
-     (app (app (var compose) (var add1))
-          (app (app (var compose) (var add1))
-               (app (app (var compose) (var add1))
-                    (app (app (var compose) (var add1))
-                         (app (app (var compose) (var add1))
-                              (app (app (var compose) (var add1))
-                                   (var add1)))))))))"
-    =>
-    "(lam ?x (+ (var ?x) 7))"
-}
-
-egg::test_fn! {
-    #[cfg(not(debug_assertions))]
-    #[cfg_attr(feature = "test-explanations", ignore)]
-    lambda_function_repeat, rules(),
-    runner = Runner::default()
-        .with_time_limit(std::time::Duration::from_secs(20))
-        .with_node_limit(150_000)
-        .with_iter_limit(60),
-    "(let compose (lam f (lam g (lam x (app (var f)
-                                       (app (var g) (var x))))))
-     (let repeat (fix repeat (lam fun (lam n
-        (if (= (var n) 0)
-            (lam i (var i))
-            (app (app (var compose) (var fun))
-                 (app (app (var repeat)
-                           (var fun))
-                      (+ (var n) -1)))))))
-     (let add1 (lam y (+ (var y) 1))
-     (app (app (var repeat)
-               (var add1))
-          2))))"
-    =>
-    "(lam ?x (+ (var ?x) 2))"
-}
-
-egg::test_fn! {
-    lambda_if, rules(),
-    "(let zeroone (lam x
-        (if (= (var x) 0)
-            0
-            1))
-        (+ (app (var zeroone) 0)
-        (app (var zeroone) 10)))"
-    =>
-    // "(+ (if false 0 1) (if true 0 1))",
-    // "(+ 1 0)",
-    "1",
-}
-
-egg::test_fn! {
-    #[cfg(not(debug_assertions))]
-    #[cfg_attr(feature = "test-explanations", ignore)]
-    lambda_fib, rules(),
-    runner = Runner::default()
-        .with_iter_limit(60)
-        .with_node_limit(500_000),
-    "(let fib (fix fib (lam n
-        (if (= (var n) 0)
-            0
-        (if (= (var n) 1)
-            1
-        (+ (app (var fib)
-                (+ (var n) -1))
-            (app (var fib)
-                (+ (var n) -2)))))))
-        (app (var fib) 4))"
-    => "3"
-}
-
-#[test]
-fn lambda_ematching_bench() {
-    let exprs = &[
-        "(let zeroone (lam x
-            (if (= (var x) 0)
-                0
-                1))
-            (+ (app (var zeroone) 0)
-            (app (var zeroone) 10)))",
-        "(let compose (lam f (lam g (lam x (app (var f)
-                                        (app (var g) (var x))))))
-        (let repeat (fix repeat (lam fun (lam n
-            (if (= (var n) 0)
-                (lam i (var i))
-                (app (app (var compose) (var fun))
-                    (app (app (var repeat)
-                            (var fun))
-                        (+ (var n) -1)))))))
-        (let add1 (lam y (+ (var y) 1))
-        (app (app (var repeat)
-                (var add1))
-            2))))",
-        "(let fib (fix fib (lam n
-            (if (= (var n) 0)
-                0
-            (if (= (var n) 1)
-                1
-            (+ (app (var fib)
-                    (+ (var n) -1))
-                (app (var fib)
-                    (+ (var n) -2)))))))
-            (app (var fib) 4))",
-    ];
-
-    let extra_patterns = &[
-        "(if (= (var ?x) ?e) ?then ?else)",
-        "(+ (+ ?a ?b) ?c)",
-        "(let ?v (fix ?v ?e) ?e)",
-        "(app (lam ?v ?body) ?e)",
-        "(let ?v ?e (app ?a ?b))",
-        "(app (let ?v ?e ?a) (let ?v ?e ?b))",
-        "(let ?v ?e (+   ?a ?b))",
-        "(+   (let ?v ?e ?a) (let ?v ?e ?b))",
-        "(let ?v ?e (=   ?a ?b))",
-        "(=   (let ?v ?e ?a) (let ?v ?e ?b))",
-        "(let ?v ?e (if ?cond ?then ?else))",
-        "(if (let ?v ?e ?cond) (let ?v ?e ?then) (let ?v ?e ?else))",
-        "(let ?v1 ?e (var ?v1))",
-        "(let ?v1 ?e (var ?v2))",
-        "(let ?v1 ?e (lam ?v1 ?body))",
-        "(let ?v1 ?e (lam ?v2 ?body))",
-        "(lam ?v2 (let ?v1 ?e ?body))",
-        "(lam ?fresh (let ?v1 ?e (let ?v2 (var ?fresh) ?body)))",
-    ];
-
-    egg::test::bench_egraph("lambda", rules(), exprs, extra_patterns);
+    "(lam ?x (+ 1 (let x (var ?x) (+ 1 (var ?x)))))"
 }
