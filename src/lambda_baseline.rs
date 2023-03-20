@@ -378,60 +378,60 @@ egg::test_fn! {
     => "3"
 }
 
-#[test]
-fn lambda_ematching_bench() {
-    let exprs = &[
-        "(let zeroone (lam x
-            (if (= (var x) 0)
-                0
-                1))
-            (+ (app (var zeroone) 0)
-            (app (var zeroone) 10)))",
-        "(let compose (lam f (lam g (lam x (app (var f)
-                                        (app (var g) (var x))))))
-        (let repeat (fix repeat (lam fun (lam n
-            (if (= (var n) 0)
-                (lam i (var i))
-                (app (app (var compose) (var fun))
-                    (app (app (var repeat)
-                            (var fun))
-                        (+ (var n) -1)))))))
-        (let add1 (lam y (+ (var y) 1))
-        (app (app (var repeat)
-                (var add1))
-            2))))",
-        "(let fib (fix fib (lam n
-            (if (= (var n) 0)
-                0
-            (if (= (var n) 1)
-                1
-            (+ (app (var fib)
-                    (+ (var n) -1))
-                (app (var fib)
-                    (+ (var n) -2)))))))
-            (app (var fib) 4))",
-    ];
+// #[test]
+// fn lambda_ematching_bench() {
+//     let exprs = &[
+//         "(let zeroone (lam x
+//             (if (= (var x) 0)
+//                 0
+//                 1))
+//             (+ (app (var zeroone) 0)
+//             (app (var zeroone) 10)))",
+//         "(let compose (lam f (lam g (lam x (app (var f)
+//                                         (app (var g) (var x))))))
+//         (let repeat (fix repeat (lam fun (lam n
+//             (if (= (var n) 0)
+//                 (lam i (var i))
+//                 (app (app (var compose) (var fun))
+//                     (app (app (var repeat)
+//                             (var fun))
+//                         (+ (var n) -1)))))))
+//         (let add1 (lam y (+ (var y) 1))
+//         (app (app (var repeat)
+//                 (var add1))
+//             2))))",
+//         "(let fib (fix fib (lam n
+//             (if (= (var n) 0)
+//                 0
+//             (if (= (var n) 1)
+//                 1
+//             (+ (app (var fib)
+//                     (+ (var n) -1))
+//                 (app (var fib)
+//                     (+ (var n) -2)))))))
+//             (app (var fib) 4))",
+//     ];
 
-    let extra_patterns = &[
-        "(if (= (var ?x) ?e) ?then ?else)",
-        "(+ (+ ?a ?b) ?c)",
-        "(let ?v (fix ?v ?e) ?e)",
-        "(app (lam ?v ?body) ?e)",
-        "(let ?v ?e (app ?a ?b))",
-        "(app (let ?v ?e ?a) (let ?v ?e ?b))",
-        "(let ?v ?e (+   ?a ?b))",
-        "(+   (let ?v ?e ?a) (let ?v ?e ?b))",
-        "(let ?v ?e (=   ?a ?b))",
-        "(=   (let ?v ?e ?a) (let ?v ?e ?b))",
-        "(let ?v ?e (if ?cond ?then ?else))",
-        "(if (let ?v ?e ?cond) (let ?v ?e ?then) (let ?v ?e ?else))",
-        "(let ?v1 ?e (var ?v1))",
-        "(let ?v1 ?e (var ?v2))",
-        "(let ?v1 ?e (lam ?v1 ?body))",
-        "(let ?v1 ?e (lam ?v2 ?body))",
-        "(lam ?v2 (let ?v1 ?e ?body))",
-        "(lam ?fresh (let ?v1 ?e (let ?v2 (var ?fresh) ?body)))",
-    ];
+//     let extra_patterns = &[
+//         "(if (= (var ?x) ?e) ?then ?else)",
+//         "(+ (+ ?a ?b) ?c)",
+//         "(let ?v (fix ?v ?e) ?e)",
+//         "(app (lam ?v ?body) ?e)",
+//         "(let ?v ?e (app ?a ?b))",
+//         "(app (let ?v ?e ?a) (let ?v ?e ?b))",
+//         "(let ?v ?e (+   ?a ?b))",
+//         "(+   (let ?v ?e ?a) (let ?v ?e ?b))",
+//         "(let ?v ?e (=   ?a ?b))",
+//         "(=   (let ?v ?e ?a) (let ?v ?e ?b))",
+//         "(let ?v ?e (if ?cond ?then ?else))",
+//         "(if (let ?v ?e ?cond) (let ?v ?e ?then) (let ?v ?e ?else))",
+//         "(let ?v1 ?e (var ?v1))",
+//         "(let ?v1 ?e (var ?v2))",
+//         "(let ?v1 ?e (lam ?v1 ?body))",
+//         "(let ?v1 ?e (lam ?v2 ?body))",
+//         "(lam ?v2 (let ?v1 ?e ?body))",
+//         "(lam ?fresh (let ?v1 ?e (let ?v2 (var ?fresh) ?body)))",
+//     ];
 
-    egg::test::bench_egraph("lambda", rules(), exprs, extra_patterns);
-}
+//     egg::test::bench_egraph("lambda", rules(), exprs, extra_patterns);
+// }

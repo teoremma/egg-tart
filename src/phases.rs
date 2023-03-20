@@ -185,27 +185,7 @@ fn main_rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
         rw!("beta";     "(app (lam ?v ?body) ?e)" => "(sub ?v ?e ?body)"),
 
         // let rules introduce sub now
-        rw!("let-app";  "(let ?v ?e (app ?a ?b))" => "(app (sub ?v ?e ?a) (sub ?v ?e ?b))"),
-        rw!("let-add";  "(let ?v ?e (+   ?a ?b))" => "(+   (sub ?v ?e ?a) (sub ?v ?e ?b))"),
-        rw!("let-eq";   "(let ?v ?e (=   ?a ?b))" => "(=   (sub ?v ?e ?a) (sub ?v ?e ?b))"),
-        rw!("let-const";
-            "(let ?v ?e ?c)" => "?c" if is_const(var("?c"))),
-        rw!("let-if";
-            "(let ?v ?e (if ?cond ?then ?else))" =>
-            "(if (sub ?v ?e ?cond) (sub ?v ?e ?then) (sub ?v ?e ?else))"
-        ),
-        rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => "?e"),
-        rw!("let-var-diff"; "(let ?v1 ?e (var ?v2))" => "(var ?v2)"
-            if is_not_same_var(var("?v1"), var("?v2"))),
-        rw!("let-lam-same"; "(let ?v1 ?e (lam ?v1 ?body))" => "(lam ?v1 ?body)"),
-        rw!("let-lam-diff";
-            "(let ?v1 ?e (lam ?v2 ?body))" =>
-            { CaptureAvoid {
-                fresh: var("?fresh"), v2: var("?v2"), e: var("?e"),
-                if_not_free: "(lam ?v2 (sub ?v1 ?e ?body))".parse().unwrap(),
-                if_free: "(lam ?fresh (sub ?v1 ?e (sub ?v2 (var ?fresh) ?body)))".parse().unwrap(),
-            }}
-            if is_not_same_var(var("?v1"), var("?v2"))),
+        rw!("let"; "(let ?v ?e ?body)" => "(sub ?v ?e ?body)"),
     ]
 }
 

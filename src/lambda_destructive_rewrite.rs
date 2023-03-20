@@ -509,6 +509,22 @@ egg::test_fn! {
     "(if (= 1 1) 7 9)" => "7"
 }
 
+egg::test_fn! {
+    lambda_dr_compose_many, rules(),
+    "(let compose (lam f (lam g (lam x (app (var f)
+                                       (app (var g) (var x))))))
+     (let add1 (lam y (+ (var y) 1))
+     (app (app (var compose) (var add1))
+          (app (app (var compose) (var add1))
+               (app (app (var compose) (var add1))
+                    (app (app (var compose) (var add1))
+                         (app (app (var compose) (var add1))
+                              (app (app (var compose) (var add1))
+                                   (var add1)))))))))"
+    =>
+    "(lam ?x (+ (var ?x) 7))"
+}
+
 // Times out with 8 doubles
 // (with 7 doubles, takes ~20s)
 // (sketch guided takes ~90s with 4 doubles)
