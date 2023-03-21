@@ -282,7 +282,7 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for ExtractionBasedSubstitution {
         _rule_name: Symbol,
     ) -> Vec<Id> {
         // let v = subst[self.v];
-        let sym_to_replace = DeBruijnIndex(1);
+        let sym_to_replace = DeBruijnIndex(0);
         let e = subst[self.e];
         let body = subst[self.body];
 
@@ -319,7 +319,7 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for ExtractionBasedSubstitution {
             e_id.into(),
         );
 
-        new_rec_expr.add(DeBruijn::Lam([body_id.into()]));
+        // new_rec_expr.add(DeBruijn::Lam([body_id.into()]));
         // println!("new_rec_expr: {:?}", new_rec_expr);
         let new_id = egraph.add_expr(&new_rec_expr);
         egraph.union(eclass, new_id);
@@ -341,29 +341,41 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
         // rw!("fix";      "(fix ?v ?e)"             => "(let (fix ?v ?e) ?e)"),
         // rw!("beta";     "(app (lam ?v ?body) ?e)" => "(let ?v ?e ?body)"),
         rw!("beta";     "(app (lam ?body) ?e)" => "(let ?e ?body)"),
-        // rw!("shift";    "(shift ?e)"             => "(shift ?e)" if is_dbi(var("?e"))),
-        rw!("shift-const"; "(shift ?c)" => "?c" if is_const(var("?c"))),
-        rw!("shift-apply"; "(shift (app ?a ?b))" => "(app (shift ?a) (shift ?b))"),
-        rw!("shift-apply-rev"; "(app (shift ?a) (shift ?b))" => "(shift (app ?a ?b))"),
-        rw!("let-app";  "(let ?e (app ?a ?b))" => "(app (let ?e ?a) (let ?e ?b))"),
-        rw!("let-app-rev";  "(app (let ?e ?a) (let ?e ?b))" => "(let ?e (app ?a ?b))"),
-        rw!("let-add";  "(let ?e (+   ?a ?b))" => "(+   (let ?e ?a) (let ?e ?b))"),
-        rw!("let-add-rev";  "(+   (let ?e ?a) (let ?e ?b))" => "(let ?e (+   ?a ?b))"),
-        rw!("let-eq";   "(let ?e (=   ?a ?b))" => "(=   (let ?e ?a) (let ?e ?b))"),
-        rw!("let-eq-rev";   "(=   (let ?e ?a) (let ?e ?b))" => "(let ?e (=   ?a ?b))"),
-        rw!("let-const";
-            "(let ?e ?c)" => "?c" if is_const(var("?c"))),
-        rw!("let-if";
-            "(let ?e (if ?cond ?then ?else))" =>
-            "(if (let ?e ?cond) (let ?e ?then) (let ?e ?else))"
-        ),
-        // rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => "?e"),
-        rw!("let-var-same"; "(let ?e @0)" => "?e"),
-        // rw!("let-var-diff"; "(let ?v1 ?e (var ?v2))" => "(var ?v2)"
-        //     if is_not_same_var(var("?v1"), var("?v2"))),
-        rw!("let-var-diff"; "(let ?e (shift ?body))" => "?body"),
-        rw!("manufacture-let"; "(app (let ?v ?e) ?body)" => "(app (let ?v ?e) (let ?v (shift ?body)))"),
-        rw!("let-lam"; "(let ?e (lam ?body))" => {
+        // // rw!("shift";    "(shift ?e)"             => "(shift ?e)" if is_dbi(var("?e"))),
+        // rw!("shift-const"; "(shift ?c)" => "?c" if is_const(var("?c"))),
+        // rw!("shift-apply"; "(shift (app ?a ?b))" => "(app (shift ?a) (shift ?b))"),
+        // rw!("shift-apply-rev"; "(app (shift ?a) (shift ?b))" => "(shift (app ?a ?b))"),
+        // rw!("let-app";  "(let ?e (app ?a ?b))" => "(app (let ?e ?a) (let ?e ?b))"),
+        // rw!("let-app-rev";  "(app (let ?e ?a) (let ?e ?b))" => "(let ?e (app ?a ?b))"),
+        // rw!("let-add";  "(let ?e (+   ?a ?b))" => "(+   (let ?e ?a) (let ?e ?b))"),
+        // rw!("let-add-rev";  "(+   (let ?e ?a) (let ?e ?b))" => "(let ?e (+   ?a ?b))"),
+        // rw!("let-eq";   "(let ?e (=   ?a ?b))" => "(=   (let ?e ?a) (let ?e ?b))"),
+        // rw!("let-eq-rev";   "(=   (let ?e ?a) (let ?e ?b))" => "(let ?e (=   ?a ?b))"),
+        // rw!("let-const";
+        //     "(let ?e ?c)" => "?c" if is_const(var("?c"))),
+        // rw!("let-if";
+        //     "(let ?e (if ?cond ?then ?else))" =>
+        //     "(if (let ?e ?cond) (let ?e ?then) (let ?e ?else))"
+        // ),
+        // // rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => "?e"),
+        // rw!("let-var-same"; "(let ?e @0)" => "?e"),
+        // // rw!("let-var-diff"; "(let ?v1 ?e (var ?v2))" => "(var ?v2)"
+        // //     if is_not_same_var(var("?v1"), var("?v2"))),
+        // rw!("let-var-diff"; "(let ?e (shift ?body))" => "?body"),
+        // rw!("manufacture-let"; "(app (let ?v ?e) ?body)" => "(app (let ?v ?e) (let ?v (shift ?body)))"),
+        // rw!("let-lam"; "(let ?e (lam ?body))" => {
+        //     ExtractionBasedSubstitution {
+        //         e: var("?e"),
+        //         body: var("?body"),
+        //     }
+        // }),
+        rw!("beta";     "(app (lam ?body) ?e)" => {
+            ExtractionBasedSubstitution {
+                e: var("?e"),
+                body: var("?body"),
+            }
+        }),
+        rw!("let";     "(let ?e ?body)" => {
             ExtractionBasedSubstitution {
                 e: var("?e"),
                 body: var("?body"),
@@ -400,14 +412,16 @@ egg::test_fn! {
 
 egg::test_fn! {
     db_double_app, rules(),
-    "(app (app (lam (lam (shift (@0)))) 1) 2)" => "1",
+    "(app (app (lam (lam @1)) 1) 2)" => "1",
 }
 
 egg::test_fn! {
-    db_compose_peano, rules(),
-    "(let (lam (lam (lam (app (shift (shift @0)) (app (shift @0) @0)))))
+    db_compose, rules(),
+    "(let (lam (lam (lam (app @2 (app @1 @0)))))
      (let (lam (+ @0 1))
-     (app (app (shift @0) @0) @0)))"
+     (app (app @1 @0) @0)))"
     =>
-    "(lam (+ @0 2))"
+    "(app (app (lam (lam (lam (app @2 (app @1 @0))))) ?x) ?x)",
+    "(app (app (lam (lam (lam (app @2 (app @1 @0))))) (lam (+ @0 1))) (lam (+ @0 1)))",
+    // "(lam (+ @0 2))"
 }

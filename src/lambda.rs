@@ -258,10 +258,14 @@ fn substitute_rec_expr(rec_expr: &mut RecExpr<Lambda>, seen: &mut HashSet<Id>, i
                         // recursively substitute...
                         rec_expr[id1] = Lambda::Symbol(fresh_sym);
                     }
+                    // Consider 'let x = e in body'. If you refer to 'x' in 'e',
+                    // which 'x' is it? We don't do recursive 'let's, so we'll
+                    // consider it unbound and allow it to refer to an outer
+                    // binding of 'x'.
+                    substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id, fresh_prefix_id);
                     if sym == subst_sym {
                         return;
                     }
-                    substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id, fresh_prefix_id);
                     substitute_rec_expr(rec_expr, seen, id3, subst_sym, subst_id, fresh_prefix_id);
                 }
                 _ => panic!("substitute_rec_expr: Let variable points to {:?}, which isn't a symbol.", rec_expr[id1])
