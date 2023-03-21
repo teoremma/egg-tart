@@ -259,6 +259,8 @@ fn substitute_rec_expr(
             // println!("substitute_rec_expr: found index {:?} at id {:?}", dbi, id);
             if dbi.0 == subst_sym.0 {
                 rec_expr[id] = rec_expr[subst_id].to_owned();
+            } else if dbi.0 > subst_sym.0 {
+                rec_expr[id] = DeBruijn::Index(dbi.decrement());
             }
         }
         DeBruijn::Bool(_) | DeBruijn::Num(_) => {
@@ -288,6 +290,8 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for ExtractionBasedSubstitution {
 
         let extractor = Extractor::new(&egraph, AstSize);
 
+        // let best_e = egraph.id_to_expr(e);
+        // let best_body = egraph.id_to_expr(body);
         let (_, best_e) = extractor.find_best(e);
         let (_, best_body) = extractor.find_best(body);
 
@@ -310,7 +314,10 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for ExtractionBasedSubstitution {
             .into();
         let body_id = body_and_e_rec_expr.as_ref().len() - 1;
         let mut new_rec_expr = body_and_e_rec_expr.clone();
-        // println!("sym: {:?}, body: {}, e: {}", sym_to_replace, best_body, best_e);//, body_and_e_rec_expr.as_ref());
+        println!(
+            "sym: {:?}, body: {}, e: {}",
+            sym_to_replace, best_body, best_e
+        ); //, body_and_e_rec_expr.as_ref());
         substitute_rec_expr(
             &mut new_rec_expr,
             &mut HashSet::default(),
@@ -320,7 +327,7 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for ExtractionBasedSubstitution {
         );
 
         // new_rec_expr.add(DeBruijn::Lam([body_id.into()]));
-        // println!("new_rec_expr: {:?}", new_rec_expr);
+        println!("new_rec_expr: {}", new_rec_expr);
         let new_id = egraph.add_expr(&new_rec_expr);
         egraph.union(eclass, new_id);
         vec![new_id] // + changed_ids
@@ -332,49 +339,10 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
         // open term rules
         rw!("if-true";  "(if true ?then ?else)" => "?then"),
         rw!("if-false"; "(if false ?then ?else)" => "?else"),
-        // rw!("if-elim"; "(if (= (var ?x) ?e) ?then ?else)" => "?else"
-        //     if ConditionEqual::parse("(let ?x ?e ?then)", "(let ?x ?e ?else)")),
         rw!("add-comm";  "(+ ?a ?b)"        => "(+ ?b ?a)"),
         rw!("add-assoc"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
         rw!("eq-comm";   "(= ?a ?b)"        => "(= ?b ?a)"),
-        // subst rules
-        // rw!("fix";      "(fix ?v ?e)"             => "(let (fix ?v ?e) ?e)"),
-        // rw!("beta";     "(app (lam ?v ?body) ?e)" => "(let ?v ?e ?body)"),
         rw!("beta";     "(app (lam ?body) ?e)" => "(let ?e ?body)"),
-        // // rw!("shift";    "(shift ?e)"             => "(shift ?e)" if is_dbi(var("?e"))),
-        // rw!("shift-const"; "(shift ?c)" => "?c" if is_const(var("?c"))),
-        // rw!("shift-apply"; "(shift (app ?a ?b))" => "(app (shift ?a) (shift ?b))"),
-        // rw!("shift-apply-rev"; "(app (shift ?a) (shift ?b))" => "(shift (app ?a ?b))"),
-        // rw!("let-app";  "(let ?e (app ?a ?b))" => "(app (let ?e ?a) (let ?e ?b))"),
-        // rw!("let-app-rev";  "(app (let ?e ?a) (let ?e ?b))" => "(let ?e (app ?a ?b))"),
-        // rw!("let-add";  "(let ?e (+   ?a ?b))" => "(+   (let ?e ?a) (let ?e ?b))"),
-        // rw!("let-add-rev";  "(+   (let ?e ?a) (let ?e ?b))" => "(let ?e (+   ?a ?b))"),
-        // rw!("let-eq";   "(let ?e (=   ?a ?b))" => "(=   (let ?e ?a) (let ?e ?b))"),
-        // rw!("let-eq-rev";   "(=   (let ?e ?a) (let ?e ?b))" => "(let ?e (=   ?a ?b))"),
-        // rw!("let-const";
-        //     "(let ?e ?c)" => "?c" if is_const(var("?c"))),
-        // rw!("let-if";
-        //     "(let ?e (if ?cond ?then ?else))" =>
-        //     "(if (let ?e ?cond) (let ?e ?then) (let ?e ?else))"
-        // ),
-        // // rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => "?e"),
-        // rw!("let-var-same"; "(let ?e @0)" => "?e"),
-        // // rw!("let-var-diff"; "(let ?v1 ?e (var ?v2))" => "(var ?v2)"
-        // //     if is_not_same_var(var("?v1"), var("?v2"))),
-        // rw!("let-var-diff"; "(let ?e (shift ?body))" => "?body"),
-        // rw!("manufacture-let"; "(app (let ?v ?e) ?body)" => "(app (let ?v ?e) (let ?v (shift ?body)))"),
-        // rw!("let-lam"; "(let ?e (lam ?body))" => {
-        //     ExtractionBasedSubstitution {
-        //         e: var("?e"),
-        //         body: var("?body"),
-        //     }
-        // }),
-        rw!("beta";     "(app (lam ?body) ?e)" => {
-            ExtractionBasedSubstitution {
-                e: var("?e"),
-                body: var("?body"),
-            }
-        }),
         rw!("let";     "(let ?e ?body)" => {
             ExtractionBasedSubstitution {
                 e: var("?e"),
@@ -417,11 +385,29 @@ egg::test_fn! {
 
 egg::test_fn! {
     db_compose, rules(),
-    "(let (lam (lam (lam (app @2 (app @1 @0)))))
-     (let (lam (+ @0 1))
-     (app (app @1 @0) @0)))"
+    "(let
+        (lam (lam (lam (app @2 (app @1 @0)))))
+        (let 
+            (lam (+ @0 1))
+            (app (app @1 @0) @0)
+        )
+    )"
     =>
-    "(app (app (lam (lam (lam (app @2 (app @1 @0))))) ?x) ?x)",
-    "(app (app (lam (lam (lam (app @2 (app @1 @0))))) (lam (+ @0 1))) (lam (+ @0 1)))",
+    // "(app (app (lam (lam (lam (app @2 (app @1 @0))))) ?x) ?x)",
+    // "(app (app (lam (lam (lam (app @2 (app @1 @0))))) (lam (+ @0 1))) (lam (+ @0 1)))",
+    "(lam (+ @0 2))"
+}
+
+egg::test_fn! {
+    db_double_let_lambdas, rules(),
+    "(let
+        (lam (+ @0 1))
+        (let 
+            (lam (+ @0 2))
+            (lam (app @2 (app @1 @0)))
+        )
+    )"
+    =>
+    "(lam (+ @0 3))",
     // "(lam (+ @0 2))"
 }
