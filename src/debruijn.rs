@@ -319,6 +319,7 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for ExtractionBasedSubstitution {
             e_id.into(),
         );
 
+        new_rec_expr.add(DeBruijn::Lam([body_id.into()]));
         // println!("new_rec_expr: {:?}", new_rec_expr);
         let new_id = egraph.add_expr(&new_rec_expr);
         egraph.union(eclass, new_id);
@@ -382,7 +383,7 @@ egg::test_fn! {
     db_simple_let2, rules(),
     "(let 4 (lam @1))"
     =>
-    "4",
+    "(lam 4)",
 }
 
 egg::test_fn! {
