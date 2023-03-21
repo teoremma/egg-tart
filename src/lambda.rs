@@ -168,31 +168,39 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
                 body: var("?body"),
             }}
         }),
-        rw!("let-app";  "(let ?v ?e (app ?a ?b))" => "(app (let ?v ?e ?a) (let ?v ?e ?b))"),
-        rw!("let-add";  "(let ?v ?e (+   ?a ?b))" => "(+   (let ?v ?e ?a) (let ?v ?e ?b))"),
-        rw!("let-eq";   "(let ?v ?e (=   ?a ?b))" => "(=   (let ?v ?e ?a) (let ?v ?e ?b))"),
-        rw!("let-const";
-            "(let ?v ?e ?c)" => "?c" if is_const(var("?c"))),
-        rw!("let-if";
-            "(let ?v ?e (if ?cond ?then ?else))" =>
-            "(if (let ?v ?e ?cond) (let ?v ?e ?then) (let ?v ?e ?else))"
-        ),
-        rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => "?e"),
-        rw!("let-var-diff"; "(let ?v1 ?e (var ?v2))" => "(var ?v2)"
-            if is_not_same_var(var("?v1"), var("?v2"))),
-        rw!("let-lam-same"; "(let ?v1 ?e (lam ?v1 ?body))" => "(lam ?v1 ?body)"),
-        rw!("let-lam-diff";
-            "(let ?v1 ?e (lam ?v2 ?body))" =>
-            { CaptureAvoid {
-                fresh: var("?fresh"), v2: var("?v2"), e: var("?e"),
-                if_not_free: "(lam ?v2 (let ?v1 ?e ?body))".parse().unwrap(),
-                if_free: "(lam ?fresh (let ?v1 ?e (let ?v2 (var ?fresh) ?body)))".parse().unwrap(),
+        rw!("let";      "(let ?v ?e ?body)" => {
+            { SketchGuidedBetaReduction {
+                v: var("?v"),
+                e: var("?e"),
+                body: var("?body"),
             }}
-            if is_not_same_var(var("?v1"), var("?v2"))),
+        }),
+        // rw!("let-app";  "(let ?v ?e (app ?a ?b))" => "(app (let ?v ?e ?a) (let ?v ?e ?b))"),
+        // rw!("let-add";  "(let ?v ?e (+   ?a ?b))" => "(+   (let ?v ?e ?a) (let ?v ?e ?b))"),
+        // rw!("let-eq";   "(let ?v ?e (=   ?a ?b))" => "(=   (let ?v ?e ?a) (let ?v ?e ?b))"),
+        // rw!("let-const";
+        //     "(let ?v ?e ?c)" => "?c" if is_const(var("?c"))),
+        // rw!("let-if";
+        //     "(let ?v ?e (if ?cond ?then ?else))" =>
+        //     "(if (let ?v ?e ?cond) (let ?v ?e ?then) (let ?v ?e ?else))"
+        // ),
+        // rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => "?e"),
+        // rw!("let-var-diff"; "(let ?v1 ?e (var ?v2))" => "(var ?v2)"
+        //     if is_not_same_var(var("?v1"), var("?v2"))),
+        // rw!("let-lam-same"; "(let ?v1 ?e (lam ?v1 ?body))" => "(lam ?v1 ?body)"),
+        // rw!("let-lam-diff";
+        //     "(let ?v1 ?e (lam ?v2 ?body))" =>
+        //     { CaptureAvoid {
+        //         fresh: var("?fresh"), v2: var("?v2"), e: var("?e"),
+        //         if_not_free: "(lam ?v2 (let ?v1 ?e ?body))".parse().unwrap(),
+        //         if_free: "(lam ?fresh (let ?v1 ?e (let ?v2 (var ?fresh) ?body)))".parse().unwrap(),
+        //     }}
+        //     if is_not_same_var(var("?v1"), var("?v2"))),
     ]
 }
 
 fn expr_contains_sym(rec_expr: &RecExpr<Lambda>, start_index: usize, end_index: usize, sym: Symbol) -> bool {
+    // println!("checking: {:?}", rec_expr.as_ref()[start_index..end_index+1].to_vec());
     rec_expr
         .as_ref()[start_index..end_index+1]
         .iter()
@@ -210,7 +218,7 @@ fn substitute_rec_expr(rec_expr: &mut RecExpr<Lambda>, seen: &mut HashSet<Id>, i
     // println!("substitute_rec_expr: visiting {:?} which is {:?}", id, rec_expr[id]);
     seen.insert(id);
     match rec_expr[id] {
-        Lambda::Add([id1, id2]) | Lambda::Eq([id1, id2]) | Lambda::App([id1, id2]) | Lambda::Fix([id1, id2]) => {
+        Lambda::Add([id1, id2]) | Lambda::Eq([id1, id2]) | Lambda::App([id1, id2])=> {
             substitute_rec_expr(rec_expr, seen, id1, subst_sym, subst_id, fresh_prefix_id);
             substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id, fresh_prefix_id);
         }
@@ -219,10 +227,12 @@ fn substitute_rec_expr(rec_expr: &mut RecExpr<Lambda>, seen: &mut HashSet<Id>, i
             substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id, fresh_prefix_id);
             substitute_rec_expr(rec_expr, seen, id3, subst_sym, subst_id, fresh_prefix_id);
         }
-        Lambda::Lambda([id1, id2]) => {
+        Lambda::Lambda([id1, id2]) | Lambda::Fix([id1, id2]) => {
             match rec_expr[id1] {
                 Lambda::Symbol(sym) => {
-                    if expr_contains_sym(rec_expr, 0, subst_id.into(), sym) {
+                    // println!("checking up to {} for symbol {}", subst_id, subst_sym);
+                    let subst_id_usize: usize = subst_id.into();
+                    if expr_contains_sym(rec_expr, 0, subst_id_usize + 1, sym) {
                         let fresh_sym = Symbol::from(format!("{0}_{1}", fresh_prefix_id, id1));
                         // Since all vars/lambdas/lets that use this name will
                         // point to this id, to alpha rename we only need to
@@ -232,7 +242,7 @@ fn substitute_rec_expr(rec_expr: &mut RecExpr<Lambda>, seen: &mut HashSet<Id>, i
                     }
                     substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id, fresh_prefix_id);
                 }
-                _ => panic!("substitute_rec_expr: Lambda variable points to {:?}, which isn't a symbol.", rec_expr[id1])
+                _ => panic!("substitute_rec_expr: Lambda/fix variable points to {:?}, which isn't a symbol.", rec_expr[id1])
             }
         }
         Lambda::Let([id1, id2, id3]) => {
@@ -585,9 +595,9 @@ egg::test_fn! {
 }
 
 egg::test_fn! {
-    #[should_panic(expected = "Could not prove goal 0")]
+    // #[should_panic(expected = "Could not prove goal 0")]
     lambda_capture, rules(),
-    "(let x 1 (lam x (var x)))" => "(lam x 1)"
+    "(let x 1 (lam x (var x)))" => "(lam ?x (var ?x))"
 }
 
 egg::test_fn! {
@@ -807,8 +817,8 @@ egg::test_fn! {
                 (+ (var n) -1))
             (app (var fib)
                 (+ (var n) -2)))))))
-        (app (var fib) 4))"
-    => "3"
+        (app (var fib) 19))"
+    => "4181"
 }
 
 #[test]
