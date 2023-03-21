@@ -226,10 +226,10 @@ fn substitute_rec_expr(
     }
     // println!("substitute_rec_expr: visiting {:?} which is {:?}", id, rec_expr[id]);
     seen.insert(id);
-    println!(
-        "substitute_rec_expr: {:?}, {:?}, {:?}",
-        rec_expr, subst_sym, id
-    );
+    // println!(
+    //     "substitute_rec_expr: {:?}, {:?}, {:?}, {:?}",
+    //     rec_expr, subst_sym, id, subst_id
+    // );
     match rec_expr[id] {
         DeBruijn::Add([id1, id2])
         | DeBruijn::Eq([id1, id2])
@@ -247,14 +247,16 @@ fn substitute_rec_expr(
             substitute_rec_expr(rec_expr, seen, id2, subst_sym.increment(), subst_id);
         }
         DeBruijn::Let([id2, id3]) => {
-            substitute_rec_expr(rec_expr, seen, id2, subst_sym.increment(), subst_id);
+            substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id);
             substitute_rec_expr(rec_expr, seen, id3, subst_sym.increment(), subst_id);
         }
         DeBruijn::Shift([id2]) => {
-            substitute_rec_expr(rec_expr, seen, id2, subst_sym.decrement(), subst_id);
+            if subst_sym.0 > 0 {
+                substitute_rec_expr(rec_expr, seen, id2, subst_sym.decrement(), subst_id);
+            }
         }
         DeBruijn::Index(dbi) => {
-            println!("substitute_rec_expr: found index {:?} at id {:?}", dbi, id);
+            // println!("substitute_rec_expr: found index {:?} at id {:?}", dbi, id);
             if dbi.0 == subst_sym.0 {
                 rec_expr[id] = rec_expr[subst_id].to_owned();
             }
@@ -316,11 +318,8 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for ExtractionBasedSubstitution {
             sym_to_replace,
             e_id.into(),
         );
-        // println!("end expr: {}", new_rec_expr);
-        // for class in egraph.classes() {
-        //     println!("id: {:?}, nodes: {:?}", class.id, class.nodes);
-        // }
-        // panic!();
+
+        // println!("new_rec_expr: {:?}", new_rec_expr);
         let new_id = egraph.add_expr(&new_rec_expr);
         egraph.union(eclass, new_id);
         vec![new_id] // + changed_ids
@@ -341,7 +340,7 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
         // rw!("fix";      "(fix ?v ?e)"             => "(let (fix ?v ?e) ?e)"),
         // rw!("beta";     "(app (lam ?v ?body) ?e)" => "(let ?v ?e ?body)"),
         rw!("beta";     "(app (lam ?body) ?e)" => "(let ?e ?body)"),
-        rw!("shift";    "(shift ?e)"             => "(shift ?e)" if is_dbi(var("?e"))),
+        // rw!("shift";    "(shift ?e)"             => "(shift ?e)" if is_dbi(var("?e"))),
         rw!("shift-const"; "(shift ?c)" => "?c" if is_const(var("?c"))),
         rw!("shift-apply"; "(shift (app ?a ?b))" => "(app (shift ?a) (shift ?b))"),
         rw!("shift-apply-rev"; "(app (shift ?a) (shift ?b))" => "(shift (app ?a ?b))"),
@@ -381,9 +380,16 @@ egg::test_fn! {
 
 egg::test_fn! {
     db_simple_let2, rules(),
-    "(let 4 (lam 1))"
+    "(let 4 (lam @1))"
     =>
-    "(lam 1)",
+    "4",
+}
+
+egg::test_fn! {
+    db_simple_let3, rules(),
+    "(let 4 (lam @0))"
+    =>
+    "(lam @0)",
 }
 
 egg::test_fn! {
