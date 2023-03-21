@@ -1,6 +1,7 @@
-use egg::{rewrite as rw, *};
+use egg::{rewrite as rw, *, test::test_runner};
 use fxhash::FxHashSet as HashSet;
 use fxhash::FxHashMap as HashMap;
+use crate::benchmarks;
 
 define_language! {
     enum Lambda {
@@ -718,6 +719,21 @@ egg::test_fn! {
                 (+ (var n) -2)))))))
         (app (var fib) 17))"
     => "1597"
+}
+
+#[test]
+fn lambda_dr_fib_range() {
+    let range = 1..20;
+    for n in range {
+        let (start, goal) = benchmarks::fib_sexprs(n);
+        let start = start.parse().unwrap();
+        let goal = goal.parse().unwrap();
+        let runner_name = std::format!("lambda_fib_{n}");
+        println!("####### {}", runner_name);
+
+        test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+        println!("\n\n\n")
+    }
 }
 
 #[test]
