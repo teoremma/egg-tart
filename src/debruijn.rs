@@ -1,10 +1,24 @@
+use egg::{rewrite as rw, *};
+use fxhash::FxHashSet as HashSet;
 use std::fmt::Display;
 use std::str::FromStr;
 
-use egg::{rewrite as rw, *};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct DeBruijnIndex(u32);
+
+impl DeBruijnIndex {
+    fn increment(&self) -> Self {
+        DeBruijnIndex(self.0 + 1)
+    }
+
+    fn decrement(&self) -> Self {
+        if self.0 > 0 {
+            DeBruijnIndex(self.0 - 1)
+        } else {
+            panic!("Cannot decrement DeBruijnIndex 0")
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 struct InvalidIndexError;
@@ -38,6 +52,7 @@ define_language! {
         "+" = Add([Id; 2]),
         "=" = Eq([Id; 2]),
 
+        "fix" = Fix([Id; 2]),
         "app" = App([Id; 2]),
         "lam" = Lam([Id; 1]),
         "let" = Let([Id; 2]),
@@ -49,11 +64,44 @@ define_language! {
     }
 }
 
+fn increment_id(id: Id, increment: usize) -> Id {
+    let id_as_usize: usize = id.into();
+    (id_as_usize + increment).into()
+}
+
 impl DeBruijn {
     fn num(&self) -> Option<i32> {
         match self {
             DeBruijn::Num(n) => Some(*n),
             _ => None,
+        }
+    }
+
+    fn increment_id(&self, increment: usize) -> Self {
+        match self {
+            DeBruijn::Add([id1, id2]) => {
+                DeBruijn::Add([increment_id(*id1, increment), increment_id(*id2, increment)])
+            }
+            DeBruijn::Eq([id1, id2]) => {
+                DeBruijn::Eq([increment_id(*id1, increment), increment_id(*id2, increment)])
+            }
+            DeBruijn::App([id1, id2]) => {
+                DeBruijn::App([increment_id(*id1, increment), increment_id(*id2, increment)])
+            }
+            DeBruijn::Lam([id]) => DeBruijn::Lam([increment_id(*id, increment)]),
+            DeBruijn::Let([id2, id3]) => {
+                DeBruijn::Let([increment_id(*id2, increment), increment_id(*id3, increment)])
+            }
+            DeBruijn::Fix([id1, id2]) => {
+                DeBruijn::Fix([increment_id(*id1, increment), increment_id(*id2, increment)])
+            }
+            DeBruijn::If([id1, id2, id3]) => DeBruijn::If([
+                increment_id(*id1, increment),
+                increment_id(*id2, increment),
+                increment_id(*id3, increment),
+            ]),
+            DeBruijn::Shift([id]) => DeBruijn::Shift([increment_id(*id, increment)]),
+            DeBruijn::Bool(_) | DeBruijn::Num(_) | DeBruijn::Index(_) => self.to_owned(),
         }
     }
 }
@@ -146,10 +194,138 @@ fn is_const(v: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
     move |egraph, _, subst| egraph[subst[v]].data.constant.is_some()
 }
 
-// fn inletif() -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
-//     println!("inletif");
-//     move |_, _, _| true
-// }
+fn is_dbi(v: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
+    move |egraph, _, subst| {
+        println!("is_dbi({:?})", egraph[subst[v]]);
+        true
+    }
+}
+
+fn get_sym(eclass: Id, egraph: &EGraph) -> DeBruijnIndex {
+    let nodes = &egraph[eclass].nodes;
+    // This var should just point to a symbol
+    match nodes[..] {
+        [DeBruijn::Index(dbi)] => dbi,
+        _ => panic!(
+            "Nodes at id: {:?} are not just a single symbol, nodes: {:?},\negraph: {:?}",
+            eclass, nodes, egraph
+        ),
+    }
+}
+
+fn substitute_rec_expr(
+    rec_expr: &mut RecExpr<DeBruijn>,
+    seen: &mut HashSet<Id>,
+    id: Id,
+    subst_sym: DeBruijnIndex,
+    subst_id: Id,
+) {
+    if seen.contains(&id) {
+        // println!("substitute_rec_expr: already seen {:?}", id);
+        return;
+    }
+    // println!("substitute_rec_expr: visiting {:?} which is {:?}", id, rec_expr[id]);
+    seen.insert(id);
+    println!(
+        "substitute_rec_expr: {:?}, {:?}, {:?}",
+        rec_expr, subst_sym, id
+    );
+    match rec_expr[id] {
+        DeBruijn::Add([id1, id2])
+        | DeBruijn::Eq([id1, id2])
+        | DeBruijn::App([id1, id2])
+        | DeBruijn::Fix([id1, id2]) => {
+            substitute_rec_expr(rec_expr, seen, id1, subst_sym, subst_id);
+            substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id);
+        }
+        DeBruijn::If([id1, id2, id3]) => {
+            substitute_rec_expr(rec_expr, seen, id1, subst_sym, subst_id);
+            substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id);
+            substitute_rec_expr(rec_expr, seen, id3, subst_sym, subst_id);
+        }
+        DeBruijn::Lam([id2]) => {
+            substitute_rec_expr(rec_expr, seen, id2, subst_sym.increment(), subst_id);
+        }
+        DeBruijn::Let([id2, id3]) => {
+            substitute_rec_expr(rec_expr, seen, id2, subst_sym.increment(), subst_id);
+            substitute_rec_expr(rec_expr, seen, id3, subst_sym.increment(), subst_id);
+        }
+        DeBruijn::Shift([id2]) => {
+            substitute_rec_expr(rec_expr, seen, id2, subst_sym.decrement(), subst_id);
+        }
+        DeBruijn::Index(dbi) => {
+            println!("substitute_rec_expr: found index {:?} at id {:?}", dbi, id);
+            if dbi.0 == subst_sym.0 {
+                rec_expr[id] = rec_expr[subst_id].to_owned();
+            }
+        }
+        DeBruijn::Bool(_) | DeBruijn::Num(_) => {
+            // Nothing to do for all other non-recursive cases
+        }
+    }
+}
+
+struct ExtractionBasedSubstitution {
+    e: Var,
+    body: Var,
+}
+
+impl Applier<DeBruijn, DeBruijnAnalysis> for ExtractionBasedSubstitution {
+    fn apply_one(
+        &self,
+        egraph: &mut EGraph,
+        eclass: Id,
+        subst: &Subst,
+        _searcher_ast: Option<&PatternAst<DeBruijn>>,
+        _rule_name: Symbol,
+    ) -> Vec<Id> {
+        // let v = subst[self.v];
+        let sym_to_replace = DeBruijnIndex(1);
+        let e = subst[self.e];
+        let body = subst[self.body];
+
+        let extractor = Extractor::new(&egraph, AstSize);
+
+        let (_, best_e) = extractor.find_best(e);
+        let (_, best_body) = extractor.find_best(body);
+
+        let e_rec_expr_len = best_e.as_ref().len();
+        let e_id = e_rec_expr_len - 1;
+
+        // Adjust the ids so we can put them at the end of the best_e rec expr.
+        let adjusted_body_rec_expr: Vec<DeBruijn> = best_body
+            .as_ref()
+            .into_iter()
+            .map(|expr| expr.increment_id(e_rec_expr_len))
+            .collect();
+        // Put both body and e into a single rec expr.
+        let body_and_e_rec_expr: RecExpr<DeBruijn> = best_e
+            .as_ref()
+            .into_iter()
+            .cloned()
+            .chain(adjusted_body_rec_expr)
+            .collect::<Vec<DeBruijn>>()
+            .into();
+        let body_id = body_and_e_rec_expr.as_ref().len() - 1;
+        let mut new_rec_expr = body_and_e_rec_expr.clone();
+        // println!("sym: {:?}, body: {}, e: {}", sym_to_replace, best_body, best_e);//, body_and_e_rec_expr.as_ref());
+        substitute_rec_expr(
+            &mut new_rec_expr,
+            &mut HashSet::default(),
+            body_id.into(),
+            sym_to_replace,
+            e_id.into(),
+        );
+        // println!("end expr: {}", new_rec_expr);
+        // for class in egraph.classes() {
+        //     println!("id: {:?}, nodes: {:?}", class.id, class.nodes);
+        // }
+        // panic!();
+        let new_id = egraph.add_expr(&new_rec_expr);
+        egraph.union(eclass, new_id);
+        vec![new_id] // + changed_ids
+    }
+}
 
 fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
     vec![
@@ -165,6 +341,7 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
         // rw!("fix";      "(fix ?v ?e)"             => "(let (fix ?v ?e) ?e)"),
         // rw!("beta";     "(app (lam ?v ?body) ?e)" => "(let ?v ?e ?body)"),
         rw!("beta";     "(app (lam ?body) ?e)" => "(let ?e ?body)"),
+        rw!("shift";    "(shift ?e)"             => "(shift ?e)" if is_dbi(var("?e"))),
         rw!("shift-const"; "(shift ?c)" => "?c" if is_const(var("?c"))),
         rw!("shift-apply"; "(shift (app ?a ?b))" => "(app (shift ?a) (shift ?b))"),
         rw!("shift-apply-rev"; "(app (shift ?a) (shift ?b))" => "(shift (app ?a ?b))"),
@@ -186,6 +363,12 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
         //     if is_not_same_var(var("?v1"), var("?v2"))),
         rw!("let-var-diff"; "(let ?e (shift ?body))" => "?body"),
         rw!("manufacture-let"; "(app (let ?v ?e) ?body)" => "(app (let ?v ?e) (let ?v (shift ?body)))"),
+        rw!("let-lam"; "(let ?e (lam ?body))" => {
+            ExtractionBasedSubstitution {
+                e: var("?e"),
+                body: var("?body"),
+            }
+        }),
     ]
 }
 
@@ -200,7 +383,7 @@ egg::test_fn! {
     db_simple_let2, rules(),
     "(let 4 (lam 1))"
     =>
-    "1",
+    "(lam 1)",
 }
 
 egg::test_fn! {
