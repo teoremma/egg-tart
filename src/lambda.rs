@@ -230,15 +230,17 @@ fn substitute_rec_expr(rec_expr: &mut RecExpr<Lambda>, seen: &mut HashSet<Id>, i
         Lambda::Lambda([id1, id2]) | Lambda::Fix([id1, id2]) => {
             match rec_expr[id1] {
                 Lambda::Symbol(sym) => {
-                    // println!("checking up to {} for symbol {}", subst_id, subst_sym);
-                    let subst_id_usize: usize = subst_id.into();
-                    if expr_contains_sym(rec_expr, 0, subst_id_usize + 1, sym) {
+                    // println!("checking up to {} for symbol {}", subst_id_usize, subst_sym);
+                    if expr_contains_sym(rec_expr, 0, subst_id.into(), sym) {
                         let fresh_sym = Symbol::from(format!("{0}_{1}", fresh_prefix_id, id1));
                         // Since all vars/lambdas/lets that use this name will
                         // point to this id, to alpha rename we only need to
                         // change the symbol beneath it. We should not need to
                         // recursively substitute...
                         rec_expr[id1] = Lambda::Symbol(fresh_sym);
+                    }
+                    if sym == subst_sym {
+                        return;
                     }
                     substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id, fresh_prefix_id);
                 }
@@ -255,6 +257,9 @@ fn substitute_rec_expr(rec_expr: &mut RecExpr<Lambda>, seen: &mut HashSet<Id>, i
                         // change the symbol beneath it. We should not need to
                         // recursively substitute...
                         rec_expr[id1] = Lambda::Symbol(fresh_sym);
+                    }
+                    if sym == subst_sym {
+                        return;
                     }
                     substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id, fresh_prefix_id);
                     substitute_rec_expr(rec_expr, seen, id3, subst_sym, subst_id, fresh_prefix_id);
