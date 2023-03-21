@@ -359,12 +359,12 @@ egg::test_fn! {
 }
 
 egg::test_fn! {
-    #[cfg(not(debug_assertions))]
-    #[cfg_attr(feature = "test-explanations", ignore)]
+    // #[cfg(not(debug_assertions))]
+    // #[cfg_attr(feature = "test-explanations", ignore)]
     lambda_fib, rules(),
-    runner = Runner::default()
-        .with_iter_limit(60)
-        .with_node_limit(500_000),
+    // runner = Runner::default()
+    //     .with_iter_limit(60)
+    //     .with_node_limit(500_000),
     "(let fib (fix fib (lam n
         (if (= (var n) 0)
             0
@@ -374,8 +374,8 @@ egg::test_fn! {
                 (+ (var n) -1))
             (app (var fib)
                 (+ (var n) -2)))))))
-        (app (var fib) 4))"
-    => "3"
+        (app (var fib) 8))"
+    => "21"
 }
 
 // #[test]
