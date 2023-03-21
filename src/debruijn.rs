@@ -136,15 +136,6 @@ fn eval(egraph: &EGraph, enode: &DeBruijn) -> Option<(DeBruijn, PatternAst<DeBru
 impl Analysis<DeBruijn> for DeBruijnAnalysis {
     type Data = Data;
     fn merge(&mut self, to: &mut Data, from: Data) -> DidMerge {
-        // let before_len = to.free.len();
-        // to.free.extend(from.free);
-        // to.free.retain(|i| from.free.contains(i));
-        // // compare lengths to see if I changed to or from
-        // DidMerge(
-        //     before_len != to.free.len(),
-        //     to.free.len() != from.free.len(),
-        // ) |
-
         merge_option(&mut to.constant, from.constant, |a, b| {
             assert_eq!(a.0, b.0, "Merged non-equal constants");
             DidMerge(false, false)
@@ -152,18 +143,6 @@ impl Analysis<DeBruijn> for DeBruijnAnalysis {
     }
 
     fn make(egraph: &EGraph, enode: &DeBruijn) -> Data {
-        // let f = |i: &Id| egraph[*i].data.free.iter().cloned();
-        // let mut free = HashSet::default();
-        // match enode {
-        //     DeBruijn::Let([a, b]) => {
-        //         free.extend(f(b));
-        //         free.extend(f(a));
-        //     }
-        //     DeBruijn::Lam([a]) => {
-        //         free.extend(f(a));
-        //     }
-        //     _ => enode.for_each(|c| free.extend(&egraph[c].data.free)),
-        // }
         let constant = eval(egraph, enode);
         Data { constant }
     }
@@ -187,30 +166,6 @@ impl Analysis<DeBruijn> for DeBruijnAnalysis {
 
 fn var(s: &str) -> Var {
     s.parse().unwrap()
-}
-
-fn is_const(v: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
-    println!("is_const({:?})", v);
-    move |egraph, _, subst| egraph[subst[v]].data.constant.is_some()
-}
-
-fn is_dbi(v: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
-    move |egraph, _, subst| {
-        println!("is_dbi({:?})", egraph[subst[v]]);
-        true
-    }
-}
-
-fn get_sym(eclass: Id, egraph: &EGraph) -> DeBruijnIndex {
-    let nodes = &egraph[eclass].nodes;
-    // This var should just point to a symbol
-    match nodes[..] {
-        [DeBruijn::Index(dbi)] => dbi,
-        _ => panic!(
-            "Nodes at id: {:?} are not just a single symbol, nodes: {:?},\negraph: {:?}",
-            eclass, nodes, egraph
-        ),
-    }
 }
 
 fn substitute_rec_expr(
@@ -290,8 +245,6 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for ExtractionBasedSubstitution {
 
         let extractor = Extractor::new(&egraph, AstSize);
 
-        // let best_e = egraph.id_to_expr(e);
-        // let best_body = egraph.id_to_expr(body);
         let (_, best_e) = extractor.find_best(e);
         let (_, best_body) = extractor.find_best(body);
 
@@ -326,7 +279,6 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for ExtractionBasedSubstitution {
             e_id.into(),
         );
 
-        // new_rec_expr.add(DeBruijn::Lam([body_id.into()]));
         println!("new_rec_expr: {}", new_rec_expr);
         let new_id = egraph.add_expr(&new_rec_expr);
         egraph.union(eclass, new_id);
