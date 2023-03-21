@@ -1,6 +1,7 @@
-use egg::{rewrite as rw, *};
+use egg::{rewrite as rw, *, test::test_runner};
 use fxhash::FxHashSet as HashSet;
 use fxhash::FxHashMap as HashMap;
+use crate::benchmarks;
 
 define_language! {
     enum Lambda {
@@ -718,6 +719,67 @@ egg::test_fn! {
                 (+ (var n) -2)))))))
         (app (var fib) 17))"
     => "1597"
+}
+
+#[test]
+fn lambda_dr_fib_range() {
+    let range = 0..30;
+    for n in range {
+        let (start, goal) = benchmarks::fib_sexprs(n);
+        let start = start.parse().unwrap();
+        let goal = goal.parse().unwrap();
+        let runner_name = std::format!("lambda_dr_fib_{n}");
+        eprintln!("####### {}", runner_name);
+
+        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+        eprintln!("\n\n\n")
+    }
+}
+
+#[test]
+fn lambda_dr_double_many_inside_range() {
+    let range = 0..10;
+    for n in range {
+        let (start, goal) = benchmarks::double_many_inside_sexprs(n);
+        let start = start.parse().unwrap();
+        let goal = goal.parse().unwrap();
+        let runner_name = std::format!("lambda_dr_double_many_inside_{n}");
+        eprintln!("####### {}", runner_name);
+
+        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+        eprintln!("\n\n\n")
+    }
+}
+
+#[test]
+fn lambda_dr_double_many_outside_range() {
+    let range = 1..10;
+    for n in range {
+        let (start, goal) = benchmarks::double_many_outside_sexprs(n);
+        let start = start.parse().unwrap();
+        let goal = goal.parse().unwrap();
+        let runner_name = std::format!("lambda_dr_double_many_outside_{n}");
+        eprintln!("####### {}", runner_name);
+
+        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+        eprintln!("\n\n\n")
+    }
+}
+
+
+#[test]
+fn lambda_dr_add_many_range() {
+    let range = 150..250;
+    for n in range {
+        let (start, goal) = benchmarks::add_many_sexprs(n);
+        let start = start.parse().unwrap();
+        let goal = goal.parse().unwrap();
+        let runner_name = std::format!("lambda_dr_add_many_{n}");
+        eprintln!("####### {}", runner_name);
+
+        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+        eprintln!("\n\n\n")
+    }
 }
 
 #[test]
