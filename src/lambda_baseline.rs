@@ -381,16 +381,61 @@ egg::test_fn! {
 
 #[test]
 fn lambda_fib_range() {
-    let range = 0..10;
+    let range = 0..15;
     for n in range {
         let (start, goal) = benchmarks::fib_sexprs(n);
         let start = start.parse().unwrap();
         let goal = goal.parse().unwrap();
         let runner_name = std::format!("lambda_fib_{n}");
-        println!("####### {}", runner_name);
+        eprintln!("####### {}", runner_name);
 
-        test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
-        println!("\n\n\n")
+        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+        eprintln!("\n\n\n")
+    }
+}
+
+#[test]
+fn lambda_double_many_inside_range() {
+    let range = 0..10;
+    for n in range {
+        let (start, goal) = benchmarks::double_many_inside_sexprs(n);
+        let start = start.parse().unwrap();
+        let goal = goal.parse().unwrap();
+        let runner_name = std::format!("lambda_double_many_inside_{n}");
+        eprintln!("####### {}", runner_name);
+
+        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+        eprintln!("\n\n\n")
+    }
+}
+
+#[test]
+fn lambda_double_many_outside_range() {
+    let range = 1..10;
+    for n in range {
+        let (start, goal) = benchmarks::double_many_outside_sexprs(n);
+        let start = start.parse().unwrap();
+        let goal = goal.parse().unwrap();
+        let runner_name = std::format!("lambda_double_many_outside_{n}");
+        eprintln!("####### {}", runner_name);
+
+        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+        eprintln!("\n\n\n")
+    }
+}
+
+#[test]
+fn lambda_add_many_range() {
+    let range = 150..250;
+    for n in range {
+        let (start, goal) = benchmarks::add_many_sexprs(n);
+        let start = start.parse().unwrap();
+        let goal = goal.parse().unwrap();
+        let runner_name = std::format!("lambda_add_many_{n}");
+        eprintln!("####### {}", runner_name);
+
+        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+        eprintln!("\n\n\n")
     }
 }
 
