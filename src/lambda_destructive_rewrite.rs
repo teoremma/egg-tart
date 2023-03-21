@@ -723,12 +723,12 @@ egg::test_fn! {
 
 #[test]
 fn lambda_dr_fib_range() {
-    let range = 1..20;
+    let range = 0..23;
     for n in range {
         let (start, goal) = benchmarks::fib_sexprs(n);
         let start = start.parse().unwrap();
         let goal = goal.parse().unwrap();
-        let runner_name = std::format!("lambda_fib_{n}");
+        let runner_name = std::format!("lambda_dr_fib_{n}");
         println!("####### {}", runner_name);
 
         test_runner(&runner_name, None, &rules(), start, &[goal], None, true);

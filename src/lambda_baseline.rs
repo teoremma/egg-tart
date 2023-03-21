@@ -381,7 +381,7 @@ egg::test_fn! {
 
 #[test]
 fn lambda_fib_range() {
-    let range = 1..10;
+    let range = 0..10;
     for n in range {
         let (start, goal) = benchmarks::fib_sexprs(n);
         let start = start.parse().unwrap();
