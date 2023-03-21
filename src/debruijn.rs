@@ -91,7 +91,7 @@ impl DeBruijnAST {
     }
 
     pub fn increment_free_vars(&self) -> Self {
-        increment_free_vars_helper(self, 0)
+        increment_free_vars_helper(self, None)
     }
 }
 
@@ -211,7 +211,7 @@ fn to_rec_expr_helper(expr_vec: &mut Vec<DeBruijn>, expr: &DeBruijnAST) -> Id {
     (expr_vec.len() - 1).into()
 }
 
-fn increment_free_vars_helper(expr: &DeBruijnAST, bound_level: u32) -> DeBruijnAST {
+fn increment_free_vars_helper(expr: &DeBruijnAST, bound_level: Option<u32>) -> DeBruijnAST {
     match expr {
         DeBruijnAST::Add(arg1, arg2) => {
             let new_arg1 = increment_free_vars_helper(arg1, bound_level);
@@ -230,7 +230,7 @@ fn increment_free_vars_helper(expr: &DeBruijnAST, bound_level: u32) -> DeBruijnA
         }
         DeBruijnAST::Fix(arg1, arg2) => {
             let new_arg1 = increment_free_vars_helper(arg1, bound_level);
-            let new_arg2 = increment_free_vars_helper(arg2, bound_level + 1);
+            let new_arg2 = increment_free_vars_helper(arg2, bound_level.map(|lvl| lvl + 1));
             DeBruijnAST::Fix(Box::new(new_arg1), Box::new(new_arg2))
         }
         DeBruijnAST::If(arg1, arg2, arg3) => {
@@ -240,24 +240,28 @@ fn increment_free_vars_helper(expr: &DeBruijnAST, bound_level: u32) -> DeBruijnA
             DeBruijnAST::If(Box::new(new_arg1), Box::new(new_arg2), Box::new(new_arg3))
         }
         DeBruijnAST::Lam(arg1) => {
-            let new_arg1 = increment_free_vars_helper(arg1, bound_level + 1);
+            let new_arg1 = increment_free_vars_helper(arg1, bound_level.map(|lvl| lvl + 1));
             DeBruijnAST::Lam(Box::new(new_arg1))
         }
         DeBruijnAST::Let(arg1, arg2) => {
             let new_arg1 = increment_free_vars_helper(arg1, bound_level);
-            let new_arg2 = increment_free_vars_helper(arg2, bound_level + 1);
+            let new_arg2 = increment_free_vars_helper(arg2, bound_level.map(|lvl| lvl + 1));
             DeBruijnAST::Let(Box::new(new_arg1), Box::new(new_arg2))
         }
         DeBruijnAST::Shift(arg2) => {
-            if bound_level > 0 {
-                increment_free_vars_helper(arg2, bound_level - 1)
+            if let Some(lvl) = bound_level {
+                if lvl > 0 {
+                    increment_free_vars_helper(arg2, bound_level.map(|lvl| lvl - 1))
+                } else {
+                    expr.clone()
+                }
             } else {
                 expr.clone()
             }
         }
         DeBruijnAST::Index(dbi) => {
             // unbound
-            if dbi.0 > bound_level {
+            if Some(dbi.0) > bound_level {
                 DeBruijnAST::Index(dbi.increment())
             // bound
             } else {
