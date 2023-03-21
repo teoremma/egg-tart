@@ -64,6 +64,215 @@ define_language! {
     }
 }
 
+#[derive(Debug, Clone)]
+enum DeBruijnAST {
+    Bool(bool),
+    Num(i32),
+    Add(Box<DeBruijnAST>, Box<DeBruijnAST>),
+    Eq(Box<DeBruijnAST>, Box<DeBruijnAST>),
+    Fix(Box<DeBruijnAST>, Box<DeBruijnAST>),
+    App(Box<DeBruijnAST>, Box<DeBruijnAST>),
+    Lam(Box<DeBruijnAST>),
+    Let(Box<DeBruijnAST>, Box<DeBruijnAST>),
+    If(Box<DeBruijnAST>, Box<DeBruijnAST>, Box<DeBruijnAST>),
+    Shift(Box<DeBruijnAST>),
+    Index(DeBruijnIndex),
+}
+
+impl DeBruijnAST {
+    pub fn from_rec_expr(rec_expr: &RecExpr<DeBruijn>) -> Self {
+        let id = rec_expr.as_ref().len() - 1;
+        from_rec_expr_helper(rec_expr, id.into())
+    }
+    pub fn to_rec_expr(&self) -> RecExpr<DeBruijn> {
+        let mut expr_vec = vec!();
+        to_rec_expr_helper(&mut expr_vec, self);
+        RecExpr::from(expr_vec)
+    }
+
+    pub fn increment_free_vars(&self) -> Self {
+        increment_free_vars_helper(self, 0)
+    }
+}
+
+fn from_rec_expr_helper(
+    rec_expr: &RecExpr<DeBruijn>,
+    id: Id,
+) -> DeBruijnAST {
+    // We assume no infinite loops (perahps a poor assumption).
+    match rec_expr[id] {
+        DeBruijn::Add([id1, id2]) => {
+            let arg1 = from_rec_expr_helper(rec_expr, id1);
+            let arg2 = from_rec_expr_helper(rec_expr, id2);
+            DeBruijnAST::Add(Box::new(arg1), Box::new(arg2))
+        }
+        DeBruijn::Eq([id1, id2]) => {
+            let arg1 = from_rec_expr_helper(rec_expr, id1);
+            let arg2 = from_rec_expr_helper(rec_expr, id2);
+            DeBruijnAST::Eq(Box::new(arg1), Box::new(arg2))
+
+        }
+        DeBruijn::App([id1, id2]) => {
+            let arg1 = from_rec_expr_helper(rec_expr, id1);
+            let arg2 = from_rec_expr_helper(rec_expr, id2);
+            DeBruijnAST::App(Box::new(arg1), Box::new(arg2))
+
+        }
+        DeBruijn::Fix([id1, id2]) => {
+            let arg1 = from_rec_expr_helper(rec_expr, id1);
+            let arg2 = from_rec_expr_helper(rec_expr, id2);
+            DeBruijnAST::Fix(Box::new(arg1), Box::new(arg2))
+        }
+        DeBruijn::If([id1, id2, id3]) => {
+            let arg1 = from_rec_expr_helper(rec_expr, id1);
+            let arg2 = from_rec_expr_helper(rec_expr, id2);
+            let arg3 = from_rec_expr_helper(rec_expr, id3);
+            DeBruijnAST::If(Box::new(arg1), Box::new(arg2), Box::new(arg3))
+        }
+        DeBruijn::Lam([id1]) => {
+            let arg1 = from_rec_expr_helper(rec_expr, id1);
+            DeBruijnAST::Lam(Box::new(arg1))
+        }
+        DeBruijn::Let([id1, id2]) => {
+            let arg1 = from_rec_expr_helper(rec_expr, id1);
+            let arg2 = from_rec_expr_helper(rec_expr, id2);
+            DeBruijnAST::Let(Box::new(arg1), Box::new(arg2))
+        }
+        DeBruijn::Shift([id1]) => {
+            let arg1 = from_rec_expr_helper(rec_expr, id1);
+            DeBruijnAST::Shift(Box::new(arg1))
+        }
+        DeBruijn::Index(dbi) => {
+            DeBruijnAST::Index(dbi)
+        }
+        DeBruijn::Bool(b) => {
+            DeBruijnAST::Bool(b)
+        }
+        DeBruijn::Num(n) => {
+            DeBruijnAST::Num(n)
+        }
+    }
+}
+
+fn to_rec_expr_helper(expr_vec: &mut Vec<DeBruijn>, expr: &DeBruijnAST) -> Id {
+    let db_expr = match expr {
+        DeBruijnAST::Add(arg1, arg2) => {
+            let id1 = to_rec_expr_helper(expr_vec, arg1);
+            let id2 = to_rec_expr_helper(expr_vec, arg2);
+            DeBruijn::Add([id1, id2])
+        }
+        DeBruijnAST::Eq(arg1, arg2) => {
+            let id1 = to_rec_expr_helper(expr_vec, arg1);
+            let id2 = to_rec_expr_helper(expr_vec, arg2);
+            DeBruijn::Eq([id1, id2])
+
+        }
+        DeBruijnAST::App(arg1, arg2) => {
+            let id1 = to_rec_expr_helper(expr_vec, arg1);
+            let id2 = to_rec_expr_helper(expr_vec, arg2);
+            DeBruijn::App([id1, id2])
+
+        }
+        DeBruijnAST::Fix(arg1, arg2) => {
+            let id1 = to_rec_expr_helper(expr_vec, arg1);
+            let id2 = to_rec_expr_helper(expr_vec, arg2);
+            DeBruijn::Fix([id1, id2])
+        }
+        DeBruijnAST::If(arg1, arg2, arg3) => {
+            let id1 = to_rec_expr_helper(expr_vec, arg1);
+            let id2 = to_rec_expr_helper(expr_vec, arg2);
+            let id3 = to_rec_expr_helper(expr_vec, arg3);
+            DeBruijn::If([id1, id2, id3])
+        }
+        DeBruijnAST::Lam(arg1) => {
+            let id1 = to_rec_expr_helper(expr_vec, arg1);
+            DeBruijn::Lam([id1])
+        }
+        DeBruijnAST::Let(arg1, arg2) => {
+            let id1 = to_rec_expr_helper(expr_vec, arg1);
+            let id2 = to_rec_expr_helper(expr_vec, arg2);
+            DeBruijn::Let([id1, id2])
+        }
+        DeBruijnAST::Shift(arg1) => {
+            let id1 = to_rec_expr_helper(expr_vec, arg1);
+            DeBruijn::Shift([id1])
+        }
+        DeBruijnAST::Index(dbi) => {
+            DeBruijn::Index(*dbi)
+        }
+        DeBruijnAST::Bool(b) => {
+            DeBruijn::Bool(*b)
+        }
+        DeBruijnAST::Num(n) => {
+            DeBruijn::Num(*n)
+        }
+    };
+    expr_vec.push(db_expr);
+    (expr_vec.len() - 1).into()
+}
+
+fn increment_free_vars_helper(expr: &DeBruijnAST, bound_level: u32) -> DeBruijnAST {
+    match expr {
+        DeBruijnAST::Add(arg1, arg2) => {
+            let new_arg1 = increment_free_vars_helper(arg1, bound_level);
+            let new_arg2 = increment_free_vars_helper(arg2, bound_level);
+            DeBruijnAST::Add(Box::new(new_arg1), Box::new(new_arg2))
+        }
+        DeBruijnAST::Eq(arg1, arg2) => {
+            let new_arg1 = increment_free_vars_helper(arg1, bound_level);
+            let new_arg2 = increment_free_vars_helper(arg2, bound_level);
+            DeBruijnAST::Eq(Box::new(new_arg1), Box::new(new_arg2))
+        }
+        DeBruijnAST::App(arg1, arg2) => {
+            let new_arg1 = increment_free_vars_helper(arg1, bound_level);
+            let new_arg2 = increment_free_vars_helper(arg2, bound_level);
+            DeBruijnAST::App(Box::new(new_arg1), Box::new(new_arg2))
+        }
+        DeBruijnAST::Fix(arg1, arg2) => {
+            let new_arg1 = increment_free_vars_helper(arg1, bound_level);
+            let new_arg2 = increment_free_vars_helper(arg2, bound_level + 1);
+            DeBruijnAST::Fix(Box::new(new_arg1), Box::new(new_arg2))
+        }
+        DeBruijnAST::If(arg1, arg2, arg3) => {
+            let new_arg1 = increment_free_vars_helper(arg1, bound_level);
+            let new_arg2 = increment_free_vars_helper(arg2, bound_level);
+            let new_arg3 = increment_free_vars_helper(arg3, bound_level);
+            DeBruijnAST::If(Box::new(new_arg1), Box::new(new_arg2), Box::new(new_arg3))
+        }
+        DeBruijnAST::Lam(arg1) => {
+            let new_arg1 = increment_free_vars_helper(arg1, bound_level + 1);
+            DeBruijnAST::Lam(Box::new(new_arg1))
+        }
+        DeBruijnAST::Let(arg1, arg2) => {
+            let new_arg1 = increment_free_vars_helper(arg1, bound_level);
+            let new_arg2 = increment_free_vars_helper(arg2, bound_level + 1);
+            DeBruijnAST::Let(Box::new(new_arg1), Box::new(new_arg2))
+        }
+        DeBruijnAST::Shift(arg2) => {
+            if bound_level > 0 {
+                increment_free_vars_helper(arg2, bound_level - 1)
+            } else {
+                expr.clone()
+            }
+        }
+        DeBruijnAST::Index(dbi) => {
+            // unbound
+            if dbi.0 > bound_level {
+                DeBruijnAST::Index(dbi.increment())
+            // bound
+            } else {
+                DeBruijnAST::Index(*dbi)
+            }
+        }
+        DeBruijnAST::Bool(b) => {
+            DeBruijnAST::Bool(*b)
+        }
+        DeBruijnAST::Num(n) => {
+            DeBruijnAST::Num(*n)
+        }
+    }
+}
+
 fn increment_id(id: Id, increment: usize) -> Id {
     let id_as_usize: usize = id.into();
     (id_as_usize + increment).into()
@@ -224,6 +433,71 @@ fn substitute_rec_expr(
     }
 }
 
+fn substitute(
+    body: &DeBruijnAST,
+    id: DeBruijnIndex,
+    subst: &DeBruijnAST,
+) -> DeBruijnAST {
+    match body {
+        DeBruijnAST::Add(arg1, arg2) => {
+            let new_arg1 = substitute(arg1, id, subst);
+            let new_arg2 = substitute(arg2, id, subst);
+            DeBruijnAST::Add(Box::new(new_arg1), Box::new(new_arg2))
+        }
+        DeBruijnAST::Eq(arg1, arg2) => {
+            let new_arg1 = substitute(arg1, id, subst);
+            let new_arg2 = substitute(arg2, id, subst);
+            DeBruijnAST::Eq(Box::new(new_arg1), Box::new(new_arg2))
+        }
+        DeBruijnAST::App(arg1, arg2) => {
+            let new_arg1 = substitute(arg1, id, subst);
+            let new_arg2 = substitute(arg2, id, subst);
+            DeBruijnAST::App(Box::new(new_arg1), Box::new(new_arg2))
+        }
+        DeBruijnAST::Fix(arg1, arg2) => {
+            let new_arg1 = substitute(arg1, id, subst);
+            let new_arg2 = substitute(arg2, id.increment(), &subst.increment_free_vars());
+            DeBruijnAST::Fix(Box::new(new_arg1), Box::new(new_arg2))
+        }
+        DeBruijnAST::If(arg1, arg2, arg3) => {
+            let new_arg1 = substitute(arg1, id, subst);
+            let new_arg2 = substitute(arg2, id, subst);
+            let new_arg3 = substitute(arg3, id, subst);
+            DeBruijnAST::If(Box::new(new_arg1), Box::new(new_arg2), Box::new(new_arg3))
+        }
+        DeBruijnAST::Lam(arg1) => {
+            let new_arg1 = substitute(arg1, id.increment(), &subst.increment_free_vars());
+            DeBruijnAST::Lam(Box::new(new_arg1))
+        }
+        DeBruijnAST::Let(arg1, arg2) => {
+            let new_arg1 = substitute(arg1, id, subst);
+            let new_arg2 = substitute(arg2, id.increment(), &subst.increment_free_vars());
+            DeBruijnAST::Let(Box::new(new_arg1), Box::new(new_arg2))
+        }
+        DeBruijnAST::Shift(arg2) => {
+            if id.0 > 0 {
+                substitute(arg2, id.decrement(), subst)
+            } else {
+                body.to_owned()
+            }
+        }
+        DeBruijnAST::Index(dbi) => {
+            // println!("substitute_rec_expr: found index {:?} at arg {:?}", dbi, arg);
+            if dbi.0 == id.0 {
+                subst.clone()
+            } else if dbi.0 > id.0 {
+                DeBruijnAST::Index(dbi.decrement())
+            } else {
+                body.to_owned()
+            }
+        }
+        DeBruijnAST::Bool(_) | DeBruijnAST::Num(_) => {
+            body.to_owned()
+        }
+    }
+
+}
+
 struct ExtractionBasedSubstitution {
     e: Var,
     body: Var,
@@ -245,42 +519,44 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for ExtractionBasedSubstitution {
 
         let extractor = Extractor::new(&egraph, AstSize);
 
-        let (_, best_e) = extractor.find_best(e);
-        let (_, best_body) = extractor.find_best(body);
+        let best_e = DeBruijnAST::from_rec_expr(&extractor.find_best(e).1);
+        let best_body = DeBruijnAST::from_rec_expr(&extractor.find_best(body).1);
 
-        let e_rec_expr_len = best_e.as_ref().len();
-        let e_id = e_rec_expr_len - 1;
+        println!("e: {}, body: {}", best_e.to_rec_expr(), best_body.to_rec_expr());
+        let substituted_body = substitute(&best_body, DeBruijnIndex(0), &best_e);
+        println!("subst_body: {}", substituted_body.to_rec_expr());
 
-        // Adjust the ids so we can put them at the end of the best_e rec expr.
-        let adjusted_body_rec_expr: Vec<DeBruijn> = best_body
-            .as_ref()
-            .into_iter()
-            .map(|expr| expr.increment_id(e_rec_expr_len))
-            .collect();
-        // Put both body and e into a single rec expr.
-        let body_and_e_rec_expr: RecExpr<DeBruijn> = best_e
-            .as_ref()
-            .into_iter()
-            .cloned()
-            .chain(adjusted_body_rec_expr)
-            .collect::<Vec<DeBruijn>>()
-            .into();
-        let body_id = body_and_e_rec_expr.as_ref().len() - 1;
-        let mut new_rec_expr = body_and_e_rec_expr.clone();
-        println!(
-            "sym: {:?}, body: {}, e: {}",
-            sym_to_replace, best_body, best_e
-        ); //, body_and_e_rec_expr.as_ref());
-        substitute_rec_expr(
-            &mut new_rec_expr,
-            &mut HashSet::default(),
-            body_id.into(),
-            sym_to_replace,
-            e_id.into(),
-        );
+        // // Adjust the ids so we can put them at the end of the best_e rec expr.
+        // let adjusted_body_rec_expr: Vec<DeBruijn> = best_body
+        //     .as_ref()
+        //     .into_iter()
+        //     .map(|expr| expr.increment_id(e_rec_expr_len))
+        //     .collect();
+        // // Put both body and e into a single rec expr.
+        // let body_and_e_rec_expr: RecExpr<DeBruijn> = best_e
+        //     .as_ref()
+        //     .into_iter()
+        //     .cloned()
+        //     .chain(adjusted_body_rec_expr)
+        //     .collect::<Vec<DeBruijn>>()
+        //     .into();
+        // let body_id = body_and_e_rec_expr.as_ref().len() - 1;
+        // let mut new_rec_expr = body_and_e_rec_expr.clone();
+        // println!(
+        //     "sym: {:?}, body: {}, e: {}",
+        //     sym_to_replace, best_body, best_e
+        // ); //, body_and_e_rec_expr.as_ref());
+        // substitute_rec_expr(
+        //     &mut new_rec_expr,
+        //     &mut HashSet::default(),
+        //     body_id.into(),
+        //     sym_to_replace,
+        //     e_id.into(),
+        // );
 
-        println!("new_rec_expr: {}", new_rec_expr);
-        let new_id = egraph.add_expr(&new_rec_expr);
+        // println!("new_rec_expr: {}", new_rec_expr);
+        // let new_id = egraph.add_expr(&new_rec_expr);
+        let new_id = egraph.add_expr(&substituted_body.to_rec_expr());
         egraph.union(eclass, new_id);
         vec![new_id] // + changed_ids
     }
@@ -294,7 +570,43 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
         rw!("add-comm";  "(+ ?a ?b)"        => "(+ ?b ?a)"),
         rw!("add-assoc"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
         rw!("eq-comm";   "(= ?a ?b)"        => "(= ?b ?a)"),
-        rw!("beta";     "(app (lam ?body) ?e)" => "(let ?e ?body)"),
+        // subst rules
+        // rw!("fix";      "(fix ?v ?e)"             => "(let (fix ?v ?e) ?e)"),
+        // rw!("beta";     "(app (lam ?body) ?e)" => "(let ?e ?body)"),
+        // // rw!("shift";    "(shift ?e)"             => "(shift ?e)" if is_dbi(var("?e"))),
+        // rw!("shift-const"; "(shift ?c)" => "?c" if is_const(var("?c"))),
+        // rw!("shift-apply"; "(shift (app ?a ?b))" => "(app (shift ?a) (shift ?b))"),
+        // rw!("shift-apply-rev"; "(app (shift ?a) (shift ?b))" => "(shift (app ?a ?b))"),
+        // rw!("let-app";  "(let ?e (app ?a ?b))" => "(app (let ?e ?a) (let ?e ?b))"),
+        // rw!("let-app-rev";  "(app (let ?e ?a) (let ?e ?b))" => "(let ?e (app ?a ?b))"),
+        // rw!("let-add";  "(let ?e (+   ?a ?b))" => "(+   (let ?e ?a) (let ?e ?b))"),
+        // rw!("let-add-rev";  "(+   (let ?e ?a) (let ?e ?b))" => "(let ?e (+   ?a ?b))"),
+        // rw!("let-eq";   "(let ?e (=   ?a ?b))" => "(=   (let ?e ?a) (let ?e ?b))"),
+        // rw!("let-eq-rev";   "(=   (let ?e ?a) (let ?e ?b))" => "(let ?e (=   ?a ?b))"),
+        // rw!("let-const";
+        //     "(let ?e ?c)" => "?c" if is_const(var("?c"))),
+        // rw!("let-if";
+        //     "(let ?e (if ?cond ?then ?else))" =>
+        //     "(if (let ?e ?cond) (let ?e ?then) (let ?e ?else))"
+        // ),
+        // // rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => "?e"),
+        // rw!("let-var-same"; "(let ?e @0)" => "?e"),
+        // // rw!("let-var-diff"; "(let ?v1 ?e (var ?v2))" => "(var ?v2)"
+        // //     if is_not_same_var(var("?v1"), var("?v2"))),
+        // rw!("let-var-diff"; "(let ?e (shift ?body))" => "?body"),
+        // rw!("manufacture-let"; "(app (let ?v ?e) ?body)" => "(app (let ?v ?e) (let ?v (shift ?body)))"),
+        // rw!("let-lam"; "(let ?e (lam ?body))" => {
+        //     ExtractionBasedSubstitution {
+        //         e: var("?e"),
+        //         body: var("?body"),
+        //     }
+        // }),
+        rw!("beta";     "(app (lam ?body) ?e)" => {
+            ExtractionBasedSubstitution {
+                e: var("?e"),
+                body: var("?body"),
+            }
+        }),
         rw!("let";     "(let ?e ?body)" => {
             ExtractionBasedSubstitution {
                 e: var("?e"),
@@ -361,5 +673,4 @@ egg::test_fn! {
     )"
     =>
     "(lam (+ @0 3))",
-    // "(lam (+ @0 2))"
 }
