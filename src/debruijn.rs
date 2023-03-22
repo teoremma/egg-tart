@@ -52,7 +52,7 @@ define_language! {
         "+" = Add([Id; 2]),
         "=" = Eq([Id; 2]),
 
-        "fix" = Fix([Id; 2]),
+        "fix" = Fix([Id; 1]),
         "app" = App([Id; 2]),
         "lam" = Lam([Id; 1]),
         "let" = Let([Id; 2]),
@@ -70,7 +70,7 @@ enum DeBruijnAST {
     Num(i32),
     Add(Box<DeBruijnAST>, Box<DeBruijnAST>),
     Eq(Box<DeBruijnAST>, Box<DeBruijnAST>),
-    Fix(Box<DeBruijnAST>, Box<DeBruijnAST>),
+    Fix(Box<DeBruijnAST>),
     App(Box<DeBruijnAST>, Box<DeBruijnAST>),
     Lam(Box<DeBruijnAST>),
     Let(Box<DeBruijnAST>, Box<DeBruijnAST>),
@@ -118,10 +118,9 @@ fn from_rec_expr_helper(
             DeBruijnAST::App(Box::new(arg1), Box::new(arg2))
 
         }
-        DeBruijn::Fix([id1, id2]) => {
+        DeBruijn::Fix([id1]) => {
             let arg1 = from_rec_expr_helper(rec_expr, id1);
-            let arg2 = from_rec_expr_helper(rec_expr, id2);
-            DeBruijnAST::Fix(Box::new(arg1), Box::new(arg2))
+            DeBruijnAST::Fix(Box::new(arg1))
         }
         DeBruijn::If([id1, id2, id3]) => {
             let arg1 = from_rec_expr_helper(rec_expr, id1);
@@ -173,10 +172,9 @@ fn to_rec_expr_helper(expr_vec: &mut Vec<DeBruijn>, expr: &DeBruijnAST) -> Id {
             DeBruijn::App([id1, id2])
 
         }
-        DeBruijnAST::Fix(arg1, arg2) => {
+        DeBruijnAST::Fix(arg1) => {
             let id1 = to_rec_expr_helper(expr_vec, arg1);
-            let id2 = to_rec_expr_helper(expr_vec, arg2);
-            DeBruijn::Fix([id1, id2])
+            DeBruijn::Fix([id1])
         }
         DeBruijnAST::If(arg1, arg2, arg3) => {
             let id1 = to_rec_expr_helper(expr_vec, arg1);
@@ -228,10 +226,10 @@ fn increment_free_vars_helper(expr: &DeBruijnAST, bound_level: Option<u32>) -> D
             let new_arg2 = increment_free_vars_helper(arg2, bound_level);
             DeBruijnAST::App(Box::new(new_arg1), Box::new(new_arg2))
         }
-        DeBruijnAST::Fix(arg1, arg2) => {
-            let new_arg1 = increment_free_vars_helper(arg1, bound_level);
-            let new_arg2 = increment_free_vars_helper(arg2, bound_level.map(|lvl| lvl + 1).or(Some(0)));
-            DeBruijnAST::Fix(Box::new(new_arg1), Box::new(new_arg2))
+        DeBruijnAST::Fix(arg1) => {
+            // TODO: Does this need the same treatement as let/map?
+            let new_arg1 = increment_free_vars_helper(arg1, bound_level.map(|lvl| lvl + 1).or(Some(0)));
+            DeBruijnAST::Fix(Box::new(new_arg1))
         }
         DeBruijnAST::If(arg1, arg2, arg3) => {
             let new_arg1 = increment_free_vars_helper(arg1, bound_level);
@@ -305,8 +303,8 @@ impl DeBruijn {
             DeBruijn::Let([id2, id3]) => {
                 DeBruijn::Let([increment_id(*id2, increment), increment_id(*id3, increment)])
             }
-            DeBruijn::Fix([id1, id2]) => {
-                DeBruijn::Fix([increment_id(*id1, increment), increment_id(*id2, increment)])
+            DeBruijn::Fix([id1]) => {
+                DeBruijn::Fix([increment_id(*id1, increment)])
             }
             DeBruijn::If([id1, id2, id3]) => DeBruijn::If([
                 increment_id(*id1, increment),
@@ -401,8 +399,7 @@ fn substitute_rec_expr(
     match rec_expr[id] {
         DeBruijn::Add([id1, id2])
         | DeBruijn::Eq([id1, id2])
-        | DeBruijn::App([id1, id2])
-        | DeBruijn::Fix([id1, id2]) => {
+        | DeBruijn::App([id1, id2]) => {
             substitute_rec_expr(rec_expr, seen, id1, subst_sym, subst_id);
             substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id);
         }
@@ -411,8 +408,8 @@ fn substitute_rec_expr(
             substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id);
             substitute_rec_expr(rec_expr, seen, id3, subst_sym, subst_id);
         }
-        DeBruijn::Lam([id2]) => {
-            substitute_rec_expr(rec_expr, seen, id2, subst_sym.increment(), subst_id);
+        DeBruijn::Lam([id1]) | DeBruijn::Fix([id1]) => {
+            substitute_rec_expr(rec_expr, seen, id1, subst_sym.increment(), subst_id);
         }
         DeBruijn::Let([id2, id3]) => {
             substitute_rec_expr(rec_expr, seen, id2, subst_sym, subst_id);
@@ -458,10 +455,9 @@ fn substitute(
             let new_arg2 = substitute(arg2, id, subst);
             DeBruijnAST::App(Box::new(new_arg1), Box::new(new_arg2))
         }
-        DeBruijnAST::Fix(arg1, arg2) => {
-            let new_arg1 = substitute(arg1, id, subst);
-            let new_arg2 = substitute(arg2, id.increment(), &subst.increment_free_vars());
-            DeBruijnAST::Fix(Box::new(new_arg1), Box::new(new_arg2))
+        DeBruijnAST::Fix(arg1) => {
+            let new_arg1 = substitute(arg1, id.increment(), &subst.increment_free_vars());
+            DeBruijnAST::Fix(Box::new(new_arg1))
         }
         DeBruijnAST::If(arg1, arg2, arg3) => {
             let new_arg1 = substitute(arg1, id, subst);
@@ -574,6 +570,7 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
         rw!("add-comm";  "(+ ?a ?b)"        => "(+ ?b ?a)"),
         rw!("add-assoc"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
         rw!("eq-comm";   "(= ?a ?b)"        => "(= ?b ?a)"),
+        rw!("fix";      "(fix ?e)"          => "(let (fix ?e) ?e)"),
         // subst rules
         // rw!("fix";      "(fix ?v ?e)"             => "(let (fix ?v ?e) ?e)"),
         // rw!("beta";     "(app (lam ?body) ?e)" => "(let ?e ?body)"),
@@ -677,4 +674,36 @@ egg::test_fn! {
     )"
     =>
     "(lam (+ @0 3))",
+}
+
+egg::test_fn! {
+    db_compose_many_many_1, rules(),
+    "(let (lam (lam (lam (app @2 (app @1 @0)))))
+     (let (lam (+ @0 1))
+     (let (lam (app (app @2 @0) @0))
+     (app @0
+     (app @0
+     (app @0
+     (app @0
+     (app @0
+     (app @0
+       @1)))))))))"
+    =>
+    "(lam (+ @0 64))"
+}
+
+egg::test_fn! {
+    db_fib, rules(),
+    "(let (fix (lam
+        (if (= @0 0)
+            0
+        (if (= @0 1)
+            1
+        (+ (app @1
+                (+ @0 -1))
+            (app @1
+                (+ @0 -2)))))))
+        (app @0 25))"
+    =>
+    "75025"
 }
