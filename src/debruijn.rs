@@ -230,7 +230,7 @@ fn increment_free_vars_helper(expr: &DeBruijnAST, bound_level: Option<u32>) -> D
         }
         DeBruijnAST::Fix(arg1, arg2) => {
             let new_arg1 = increment_free_vars_helper(arg1, bound_level);
-            let new_arg2 = increment_free_vars_helper(arg2, bound_level.map(|lvl| lvl + 1));
+            let new_arg2 = increment_free_vars_helper(arg2, bound_level.map(|lvl| lvl + 1).or(Some(0)));
             DeBruijnAST::Fix(Box::new(new_arg1), Box::new(new_arg2))
         }
         DeBruijnAST::If(arg1, arg2, arg3) => {
@@ -240,12 +240,12 @@ fn increment_free_vars_helper(expr: &DeBruijnAST, bound_level: Option<u32>) -> D
             DeBruijnAST::If(Box::new(new_arg1), Box::new(new_arg2), Box::new(new_arg3))
         }
         DeBruijnAST::Lam(arg1) => {
-            let new_arg1 = increment_free_vars_helper(arg1, bound_level.map(|lvl| lvl + 1));
+            let new_arg1 = increment_free_vars_helper(arg1, bound_level.map(|lvl| lvl + 1).or(Some(0)));
             DeBruijnAST::Lam(Box::new(new_arg1))
         }
         DeBruijnAST::Let(arg1, arg2) => {
             let new_arg1 = increment_free_vars_helper(arg1, bound_level);
-            let new_arg2 = increment_free_vars_helper(arg2, bound_level.map(|lvl| lvl + 1));
+            let new_arg2 = increment_free_vars_helper(arg2, bound_level.map(|lvl| lvl + 1).or(Some(0)));
             DeBruijnAST::Let(Box::new(new_arg1), Box::new(new_arg2))
         }
         DeBruijnAST::Shift(arg2) => {
@@ -526,9 +526,9 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for ExtractionBasedSubstitution {
         let best_e = DeBruijnAST::from_rec_expr(&extractor.find_best(e).1);
         let best_body = DeBruijnAST::from_rec_expr(&extractor.find_best(body).1);
 
-        println!("e: {}, body: {}", best_e.to_rec_expr(), best_body.to_rec_expr());
+        // println!("e: {}, body: {}", best_e.to_rec_expr(), best_body.to_rec_expr());
         let substituted_body = substitute(&best_body, DeBruijnIndex(0), &best_e);
-        println!("subst_body: {}", substituted_body.to_rec_expr());
+        // println!("subst_body: {}", substituted_body.to_rec_expr());
 
         // // Adjust the ids so we can put them at the end of the best_e rec expr.
         // let adjusted_body_rec_expr: Vec<DeBruijn> = best_body
