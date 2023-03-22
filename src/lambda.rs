@@ -830,6 +830,24 @@ egg::test_fn! {
     => "4181"
 }
 
+egg::test_fn! {
+    lambda_fib_2, rules(),
+    runner = Runner::default()
+        .with_iter_limit(60)
+        .with_node_limit(500_000),
+    "(let fib (fix fib (lam n
+        (if (= (var n) 0)
+            0
+        (if (= (var n) 1)
+            1
+        (+ (app (var fib)
+                (+ (var n) -1))
+            (app (var fib)
+                (+ (var n) -2)))))))
+        (app (var fib) 25))"
+    => "75025"
+}
+
 #[test]
 fn lambda_ematching_bench() {
     let exprs = &[

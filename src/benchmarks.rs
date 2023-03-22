@@ -102,6 +102,23 @@ pub fn fib_sexprs(n: usize) -> (String, String) {
     (start, goal)
 }
 
+pub fn fib_sexprs_db(n: usize) -> (String, String) {
+    let start =
+    std::format!(
+    "(let (fix (lam
+        (if (= @0 0)
+            0
+        (if (= @0 1)
+            1
+        (+ (app @1
+                (+ @0 -1))
+            (app @1
+                (+ @0 -2)))))))
+        (app @0 {n}))");
+    let goal = std::format!("{tgt}", tgt=fibonacci(n));
+    (start, goal)
+}
+
 pub fn double_many_inside_sexprs(n: usize) -> (String, String) {
     fn double_add(n: usize) -> String {
         if n == 0 { "(var add1)".to_string() }

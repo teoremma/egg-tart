@@ -2,6 +2,7 @@ use egg::{rewrite as rw, *};
 use fxhash::FxHashSet as HashSet;
 use std::fmt::Display;
 use std::str::FromStr;
+use crate::benchmarks;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct DeBruijnIndex(u32);
@@ -706,4 +707,19 @@ egg::test_fn! {
         (app @0 25))"
     =>
     "75025"
+}
+
+#[test]
+fn lambda_db_fib_range() {
+    let range = 0..30;
+    for n in range {
+        let (start, goal) = benchmarks::fib_sexprs_db(n);
+        let start = start.parse().unwrap();
+        let goal = goal.parse().unwrap();
+        let runner_name = std::format!("lambda_db_fib_{n}");
+        eprintln!("####### {}", runner_name);
+
+        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+        eprintln!("\n\n\n")
+    }
 }
