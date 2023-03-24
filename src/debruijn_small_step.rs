@@ -1,5 +1,4 @@
 use egg::{rewrite as rw, *};
-use fxhash::FxHashSet as HashSet;
 use std::fmt::Display;
 use std::str::FromStr;
 use crate::benchmarks;
@@ -348,7 +347,6 @@ impl MatchOverLanguage for DeBruijn {
     where Self: Sized,
           P: FnMut(&Id, &Id) -> bool,
     {
-        return false;
         use DeBruijn::*;
         match (self, candidate) {
             (Bool(b_self), Bool(b_cand)) => b_self == b_cand,
@@ -618,6 +616,22 @@ egg::test_fn! {
         (app @0 5))"
     =>
     "5"
+}
+
+egg::test_fn! {
+    dbsmallstep_small_fib, rules(),
+    "(let (fix (lam
+        (if (= @0 0)
+            0
+        (if (= @0 1)
+            1
+        (+ (app @1
+                (+ @0 -1))
+            (app @1
+                (+ @0 -2)))))))
+        (app @0 6))"
+    =>
+    "8"
 }
 
 // #[test]
