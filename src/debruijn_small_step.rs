@@ -3,6 +3,7 @@ use fxhash::FxHashSet as HashSet;
 use std::fmt::Display;
 use std::str::FromStr;
 use crate::benchmarks;
+use crate::destructive_rewrite::{MatchOverLanguage, DestructiveRewrite};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct DeBruijnIndex(u32);
@@ -205,8 +206,18 @@ fn is_both_index(i1: Var, i2: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
 fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
     vec![
         // open term rules
-        rw!("if-true";  "(if true ?then ?else)" => "?then"),
-        rw!("if-false"; "(if false ?then ?else)" => "?else"),
+        rw!("if-true";  "(if true ?then ?else)" => {
+            DestructiveRewrite {
+                original_pattern: "(if true ?then ?else)".parse().unwrap(),
+                add_pattern: "?then".parse().unwrap()
+            }
+        }),
+        rw!("if-false"; "(if false ?then ?else)" => {
+            DestructiveRewrite {
+                original_pattern: "(if false ?then ?else)".parse().unwrap(),
+                add_pattern: "?else".parse().unwrap()
+            }
+        }),
         rw!("add-comm";  "(+ ?a ?b)"        => "(+ ?b ?a)"),
         rw!("add-assoc"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
         rw!("eq-comm";   "(= ?a ?b)"        => "(= ?b ?a)"),
@@ -222,25 +233,146 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
                 target_index: var("?i2"),
             }
         } if is_both_index(var("?i1"), var("?i2"))),
-        rw!("sub-const"; "(sub ?i ?e ?c)" => "?c" if is_const(var("?c"))),
-        rw!("sub-apply"; "(sub ?i ?e (app ?a ?b))" => "(app (sub ?i ?e ?a) (sub ?i ?e ?b))"),
-        rw!("sub-add"; "(sub ?i ?e (+ ?a ?b))" => "(+ (sub ?i ?e ?a) (sub ?i ?e ?b))"),
-        rw!("sub-eq"; "(sub ?i ?e (= ?a ?b))" => "(= (sub ?i ?e ?a) (sub ?i ?e ?b))"),
-        rw!("sub-if"; "(sub ?i ?e (if ?cond ?then ?else))" => "(if (sub ?i ?e ?cond) (sub ?i ?e ?then) (sub ?i ?e ?else))"),
-        rw!("sub-let"; "(sub ?i ?e1 (let ?v ?e2))" => "(let ?v (sub (shift ?i ?i) (shift @0 ?e1) ?e2))"),
-        rw!("sub-lam"; "(sub ?i ?e1 (lam ?body))" => "(lam (sub (shift ?i ?i) (shift @0 ?e1) ?body))"),
+        rw!("sub-const"; "(sub ?i ?e ?c)" => {
+            DestructiveRewrite {
+                original_pattern: "(sub ?i ?e ?c)".parse().unwrap(),
+                add_pattern: "?c".parse().unwrap(),
+            }
+        } if is_const(var("?c"))),
+        rw!("sub-apply"; "(sub ?i ?e (app ?a ?b))" => {
+            DestructiveRewrite {
+                original_pattern: "(sub ?i ?e (app ?a ?b))".parse().unwrap(),
+                add_pattern: "(app (sub ?i ?e ?a) (sub ?i ?e ?b))".parse().unwrap(),
+            }
+        }),
+        rw!("sub-add"; "(sub ?i ?e (+ ?a ?b))" => {
+            DestructiveRewrite {
+                original_pattern: "(sub ?i ?e (+ ?a ?b))".parse().unwrap(),
+                add_pattern: "(+ (sub ?i ?e ?a) (sub ?i ?e ?b))".parse().unwrap(),
+            }
+        }),
+        rw!("sub-eq"; "(sub ?i ?e (= ?a ?b))" => {
+            DestructiveRewrite {
+                original_pattern: "(sub ?i ?e (= ?a ?b))".parse().unwrap(),
+                add_pattern: "(= (sub ?i ?e ?a) (sub ?i ?e ?b))".parse().unwrap(),
+            }
+        }),
+        rw!("sub-if"; "(sub ?i ?e (if ?cond ?then ?else))" => {
+            DestructiveRewrite {
+                original_pattern: "(sub ?i ?e (if ?cond ?then ?else))".parse().unwrap(),
+                add_pattern: "(if (sub ?i ?e ?cond) (sub ?i ?e ?then) (sub ?i ?e ?else))".parse().unwrap(),
+            }
+        }),
+        rw!("sub-let"; "(sub ?i ?e1 (let ?v ?e2))" => {
+            DestructiveRewrite {
+                original_pattern: "(sub ?i ?e1 (let ?v ?e2))".parse().unwrap(),
+                add_pattern: "(let ?v (sub (shift ?i ?i) (shift @0 ?e1) ?e2))".parse().unwrap(),
+            }
+        }),
+        rw!("sub-lam"; "(sub ?i ?e1 (lam ?body))" => {
+            DestructiveRewrite {
+                original_pattern: "(sub ?i ?e1 (lam ?body))".parse().unwrap(),
+                add_pattern: "(lam (sub (shift ?i ?i) (shift @0 ?e1) ?body))".parse().unwrap(),
+            }
+        }),
         // shifting - this is to shift free variables when we substitute over a lambda/let/fix.
         rw!("shift";    "(shift ?i1 ?i2)"             => { ShiftIndex { min_index: var("?i1"), index: var("?i2") }} if is_both_index(var("?i1"), var("?i2"))),
-        rw!("shift-const"; "(shift ?i ?c)" => "?c" if is_const(var("?c"))),
-        rw!("shift-apply"; "(shift ?i (app ?a ?b))" => "(app (shift ?i ?a) (shift ?i ?b))"),
-        rw!("shift-add"; "(shift ?i (+ ?a ?b))" => "(+ (shift ?i ?a) (shift ?i ?b))"),
-        rw!("shift-eq"; "(shift ?i (= ?a ?b))" => "(= (shift ?i ?a) (shift ?i ?b))"),
-        rw!("shift-if"; "(shift ?i (if ?cond ?then ?else))" => "(if (shift ?i ?cond) (shift ?i ?then) (shift ?i ?else))"),
+        rw!("shift-const"; "(shift ?i ?c)" => {
+            DestructiveRewrite {
+                original_pattern: "(shift ?i ?c)".parse().unwrap(),
+                add_pattern: "?c".parse().unwrap(),
+            }
+        } if is_const(var("?c"))),
+        rw!("shift-apply"; "(shift ?i (app ?a ?b))" => {
+            DestructiveRewrite {
+                original_pattern: "(shift ?i (app ?a ?b))".parse().unwrap(),
+                add_pattern: "(app (shift ?i ?a) (shift ?i ?b))".parse().unwrap(),
+            }
+        }),
+        rw!("shift-add"; "(shift ?i (+ ?a ?b))" => {
+            DestructiveRewrite {
+                original_pattern: "(shift ?i (+ ?a ?b))".parse().unwrap(),
+                add_pattern: "(+ (shift ?i ?a) (shift ?i ?b))".parse().unwrap(),
+            }
+        }),
+        rw!("shift-eq"; "(shift ?i (= ?a ?b))" => {
+            DestructiveRewrite {
+                original_pattern: "(shift ?i (= ?a ?b))".parse().unwrap(),
+                add_pattern: "(= (shift ?i ?a) (shift ?i ?b))".parse().unwrap(),
+            }
+        }),
+        rw!("shift-if"; "(shift ?i (if ?cond ?then ?else))" => {
+            DestructiveRewrite {
+                original_pattern: "(shift ?i (if ?cond ?then ?else))".parse().unwrap(),
+                add_pattern: "(if (shift ?i ?cond) (shift ?i ?then) (shift ?i ?else))".parse().unwrap(),
+            }
+        }),
         // shift doesn't work on bound indices
-        rw!("shift-let"; "(shift ?i (let ?v ?e))" => "(let (shift ?i ?v) (shift (shift ?i ?i) ?e))"),
-        rw!("shift-lam"; "(shift ?i (lam ?e))" => "(lam (shift (shift ?i ?i) ?e))"),
-        rw!("shift-fix"; "(shift ?i (fix ?e))" => "(fix (shift (shift ?i ?i) ?e))"),
+        rw!("shift-let"; "(shift ?i (let ?v ?e))" => {
+            DestructiveRewrite {
+                original_pattern: "(shift ?i (let ?v ?e))".parse().unwrap(),
+                add_pattern: "(let (shift ?i ?v) (shift (shift ?i ?i) ?e))".parse().unwrap(),
+            }
+        }),
+        rw!("shift-lam"; "(shift ?i (lam ?e))" => {
+            DestructiveRewrite {
+                original_pattern: "(shift ?i (lam ?e))".parse().unwrap(),
+                add_pattern: "(lam (shift (shift ?i ?i) ?e))".parse().unwrap(),
+            }
+        }),
+        // rw!("shift-fix"; "(shift ?i (fix ?e))" => "(fix (shift (shift ?i ?i) ?e))"),
     ]
+}
+
+impl MatchOverLanguage for DeBruijn {
+    fn match_over<P>(&self, candidate: &Self, mut match_child: P) -> bool
+    where Self: Sized,
+          P: FnMut(&Id, &Id) -> bool,
+    {
+        use DeBruijn::*;
+        match (self, candidate) {
+            (Bool(b_self), Bool(b_cand)) => b_self == b_cand,
+            (Num(n_self), Num(n_cand)) => n_self == n_cand,
+            (Index(i_self), Index(i_cand)) => i_self == i_cand,
+            (Add([e1_self, e2_self]), Add([e1_cand, e2_cand])) => {
+                match_child(e1_self, e1_cand)
+                && match_child(e2_self, e2_cand)
+            }
+            (Eq([e1_self, e2_self]), Eq([e1_cand, e2_cand])) => {
+                match_child(e1_self, e1_cand)
+                && match_child(e2_self, e2_cand)
+            }
+            (App([e1_self, e2_self]), App([e1_cand, e2_cand])) => {
+                match_child(e1_self, e1_cand)
+                && match_child(e2_self, e2_cand)
+            }
+            (Let([e1_self, e2_self]), Let([e1_cand, e2_cand])) => {
+                match_child(e1_self, e1_cand)
+                && match_child(e2_self, e2_cand)
+            }
+            (Shift([e1_self, e2_self]), Shift([e1_cand, e2_cand])) => {
+                match_child(e1_self, e1_cand)
+                && match_child(e2_self, e2_cand)
+            }
+            (Lam([e_self]), Lam([e_cand])) => {
+                match_child(e_self, e_cand)
+            }
+            (Fix([e_self]), Fix([e_cand])) => {
+                match_child(e_self, e_cand)
+            }
+            (Sub([e1_self, e2_self, e3_self]), Sub([e1_cand, e2_cand, e3_cand])) => {
+                match_child(e1_self, e1_cand)
+                && match_child(e2_self, e2_cand)
+                && match_child(e3_self, e3_cand)
+            }
+            (If([e1_self, e2_self, e3_self]), If([e1_cand, e2_cand, e3_cand])) => {
+                match_child(e1_self, e1_cand)
+                && match_child(e2_self, e2_cand)
+                && match_child(e3_self, e3_cand)
+            }
+            _ => false,
+        }
+    }
 }
 
 struct ShiftIndex {
@@ -447,9 +579,9 @@ egg::test_fn! {
                 (+ @0 -1))
             (app @1
                 (+ @0 -2)))))))
-        (app @0 25))"
+        (app @0 5))"
     =>
-    "75025"
+    "5"
 }
 
 // #[test]
