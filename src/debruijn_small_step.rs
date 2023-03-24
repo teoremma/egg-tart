@@ -132,9 +132,10 @@ struct DeBruijnAnalysis;
 #[derive(Debug)]
 struct Data {
     constant: Option<(DeBruijn, PatternAst<DeBruijn>)>,
+    index: Option<DeBruijnIndex>,
 }
 
-fn eval(egraph: &EGraph, enode: &DeBruijn) -> Option<(DeBruijn, PatternAst<DeBruijn>)> {
+fn eval_constant(egraph: &EGraph, enode: &DeBruijn) -> Option<(DeBruijn, PatternAst<DeBruijn>)> {
     let x = |i: &Id| egraph[*i].data.constant.as_ref().map(|c| &c.0);
     match enode {
         DeBruijn::Num(n) => Some((enode.clone(), format!("{}", n).parse().unwrap())),
@@ -151,18 +152,31 @@ fn eval(egraph: &EGraph, enode: &DeBruijn) -> Option<(DeBruijn, PatternAst<DeBru
     }
 }
 
+fn eval_index(enode: &DeBruijn) -> Option<DeBruijnIndex> {
+    match enode {
+        DeBruijn::Index(i) => Some(*i),
+        _ => None,
+    }
+}
+
 impl Analysis<DeBruijn> for DeBruijnAnalysis {
     type Data = Data;
     fn merge(&mut self, to: &mut Data, from: Data) -> DidMerge {
-        merge_option(&mut to.constant, from.constant, |a, b| {
+        let res1 = merge_option(&mut to.constant, from.constant, |a, b| {
             assert_eq!(a.0, b.0, "Merged non-equal constants");
             DidMerge(false, false)
-        })
+        });
+        let res2 = merge_option(&mut to.index, from.index, |a, b| {
+            assert_eq!(a.0, b.0, "Merged non-equal indices");
+            DidMerge(false, false)
+        });
+        res1 | res2
     }
 
     fn make(egraph: &EGraph, enode: &DeBruijn) -> Data {
-        let constant = eval(egraph, enode);
-        Data { constant }
+        let constant = eval_constant(egraph, enode);
+        let index = eval_index(enode);
+        Data { constant, index }
     }
 
     fn modify(egraph: &mut EGraph, id: Id) {
@@ -178,6 +192,11 @@ impl Analysis<DeBruijn> for DeBruijnAnalysis {
                 let const_id = egraph.add(c.0);
                 egraph.union(id, const_id);
             }
+        }
+        if let Some(i) = &egraph[id].data.index {
+            // TODO: explanation
+            let index_id = egraph.add(DeBruijn::Index(*i));
+            egraph.union(id, index_id);
         }
     }
 }
@@ -197,8 +216,8 @@ fn is_const(v: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
 // Indices should live in a singleton e-class
 fn is_both_index(i1: Var, i2: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
     move |egraph, _, subst| {
-        egraph[subst[i1]].len() == 1 && egraph[subst[i1]].nodes[0].index().is_some()
-        && egraph[subst[i2]].len() == 1 && egraph[subst[i2]].nodes[0].index().is_some()
+        egraph[subst[i1]].data.index.is_some()
+        && egraph[subst[i2]].data.index.is_some()
     }
 }
 
@@ -230,7 +249,7 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
             SubIndex {
                 sub_index: var("?i1"),
                 sub_e: var("?e"),
-                target_index: var("?i2"),
+                matched_index: var("?i2"),
             }
         } if is_both_index(var("?i1"), var("?i2"))),
         rw!("sub-const"; "(sub ?i ?e ?c)" => {
@@ -266,17 +285,17 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
         rw!("sub-let"; "(sub ?i ?e1 (let ?v ?e2))" => {
             DestructiveRewrite {
                 original_pattern: "(sub ?i ?e1 (let ?v ?e2))".parse().unwrap(),
-                add_pattern: "(let ?v (sub (shift ?i ?i) (shift @0 ?e1) ?e2))".parse().unwrap(),
+                add_pattern: "(let ?v (sub (shift @0 ?i) (shift @0 ?e1) ?e2))".parse().unwrap(),
             }
         }),
         rw!("sub-lam"; "(sub ?i ?e1 (lam ?body))" => {
             DestructiveRewrite {
                 original_pattern: "(sub ?i ?e1 (lam ?body))".parse().unwrap(),
-                add_pattern: "(lam (sub (shift ?i ?i) (shift @0 ?e1) ?body))".parse().unwrap(),
+                add_pattern: "(lam (sub (shift @0 ?i) (shift @0 ?e1) ?body))".parse().unwrap(),
             }
         }),
         // shifting - this is to shift free variables when we substitute over a lambda/let/fix.
-        rw!("shift";    "(shift ?i1 ?i2)"             => { ShiftIndex { min_index: var("?i1"), index: var("?i2") }} if is_both_index(var("?i1"), var("?i2"))),
+        rw!("shift";    "(shift ?i1 ?i2)"  => { ShiftIndex { min_index: var("?i1"), index: var("?i2") }} if is_both_index(var("?i1"), var("?i2"))),
         rw!("shift-const"; "(shift ?i ?c)" => {
             DestructiveRewrite {
                 original_pattern: "(shift ?i ?c)".parse().unwrap(),
@@ -311,16 +330,16 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
         rw!("shift-let"; "(shift ?i (let ?v ?e))" => {
             DestructiveRewrite {
                 original_pattern: "(shift ?i (let ?v ?e))".parse().unwrap(),
-                add_pattern: "(let (shift ?i ?v) (shift (shift ?i ?i) ?e))".parse().unwrap(),
+                add_pattern: "(let (shift ?i ?v) (shift (shift @0 ?i) ?e))".parse().unwrap(),
             }
         }),
         rw!("shift-lam"; "(shift ?i (lam ?e))" => {
             DestructiveRewrite {
                 original_pattern: "(shift ?i (lam ?e))".parse().unwrap(),
-                add_pattern: "(lam (shift (shift ?i ?i) ?e))".parse().unwrap(),
+                add_pattern: "(lam (shift (shift @0 ?i) ?e))".parse().unwrap(),
             }
         }),
-        // rw!("shift-fix"; "(shift ?i (fix ?e))" => "(fix (shift (shift ?i ?i) ?e))"),
+        // rw!("shift-fix"; "(shift ?i (fix ?e))" => "(fix (shift (shift @0 ?i) ?e))"),
     ]
 }
 
@@ -329,6 +348,7 @@ impl MatchOverLanguage for DeBruijn {
     where Self: Sized,
           P: FnMut(&Id, &Id) -> bool,
     {
+        return false;
         use DeBruijn::*;
         match (self, candidate) {
             (Bool(b_self), Bool(b_cand)) => b_self == b_cand,
@@ -380,26 +400,9 @@ struct ShiftIndex {
     index: Var,
 }
 
-// It is assumed that this Id is a singleton eclass containing only an index.
-//
-// The check should be done by e.g. is_both_index().
-fn extract_dbi(egraph: &EGraph, index: Id) -> DeBruijnIndex {
-    match egraph[index].nodes[0] {
-            DeBruijn::Index(dbi) => dbi,
-            _ => unreachable!(),
-        }
-}
-
-/// Converts (shift i) => i + 1 for a debruijn index.
+/// Shifts a DeBruijn Index if it's greater than min_index.
 ///
-/// Example:
-///
-/// (shift @0) => @1
-///
-/// This is a destructive rewrite (the original shift is removed). It's unclear
-/// whether doing this destructively gains anything because sharing probably
-/// makes it so that there aren't a lot of these nodes (note that (shift i) is a
-/// leaf).
+/// The idea is to only shift free vars.
 impl Applier<DeBruijn, DeBruijnAnalysis> for ShiftIndex {
     fn apply_one(
         &self,
@@ -413,9 +416,8 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for ShiftIndex {
         let min_dbi_id = subst[self.min_index];
         // If we reach this rule, it is assumed that these eclasses are both a
         // singleton eclass containing only an index.
-        let index_dbi = extract_dbi(egraph, index_id);
-        let min_dbi = extract_dbi(egraph, min_dbi_id);
-        // println!("shifting index: {} min_index: {}", index_dbi, min_dbi);
+        let index_dbi = egraph[index_id].data.index.unwrap();
+        let min_dbi = egraph[min_dbi_id].data.index.unwrap();
         // Remove the shift we matched.
         egraph[eclass].nodes = egraph[eclass].nodes
             .to_owned()
@@ -439,7 +441,7 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for ShiftIndex {
 struct SubIndex {
     sub_index: Var,
     sub_e: Var,
-    target_index: Var,
+    matched_index: Var,
 }
 
 impl Applier<DeBruijn, DeBruijnAnalysis> for SubIndex {
@@ -454,9 +456,9 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for SubIndex {
     ) -> Vec<Id> {
         let sub_index_id = subst[self.sub_index];
         let sub_e_id = subst[self.sub_e];
-        let target_index_id = subst[self.target_index];
-        let sub_index = extract_dbi(egraph, sub_index_id);
-        let target_index = extract_dbi(egraph, target_index_id);
+        let matched_index_id = subst[self.matched_index];
+        let sub_index = egraph[sub_index_id].data.index.unwrap();
+        let matched_index = egraph[matched_index_id].data.index.unwrap();
         // Remove the sub we matched.
         egraph[eclass].nodes = egraph[eclass].nodes
             .to_owned()
@@ -465,20 +467,20 @@ impl Applier<DeBruijn, DeBruijnAnalysis> for SubIndex {
                 DeBruijn::Sub([id1, id2, id3])
                     if *id1 == sub_index_id
                     && *id2 == sub_e_id
-                    && *id3 == target_index_id => false,
+                    && *id3 == matched_index_id => false,
                 _ => true,
             })
             .collect();
         // If they're equal, substitute
-        let new_expr_id = if target_index.0 == sub_index.0 {
+        let new_expr_id = if matched_index.0 == sub_index.0 {
             sub_e_id
-        // If the target index is greater, then it must be free. We need to
+        // If the matched index is greater, then it must be free. We need to
         // decrement it.
-        } else if target_index.0 > sub_index.0 {
-            egraph.add(DeBruijn::Index(target_index.decrement()))
+        } else if matched_index.0 > sub_index.0 {
+            egraph.add(DeBruijn::Index(matched_index.decrement()))
         // Otherwise, it's bound and we can't touch it.
         } else {
-            egraph.add(DeBruijn::Index(target_index))
+            egraph.add(DeBruijn::Index(matched_index))
         };
         egraph.union(new_expr_id, eclass);
         vec!(new_expr_id, eclass)
@@ -517,6 +519,29 @@ egg::test_fn! {
 }
 
 egg::test_fn! {
+    dbsmallstep_four_let, rules(),
+    "(let (lam (+ 1 @0))
+     (let (lam (+ 2 @0))
+     (let (lam (+ 3 @0))
+     (let (lam (+ 4 @0))
+      (app @3 (app @2 (app @1 (app @0 0))))))))
+    "
+    =>
+    "10"
+}
+
+egg::test_fn! {
+    dbsmallstep_recursive_let, rules(),
+    "(let (lam (+ 1 @0))
+     (let (lam (app @1 (app @1 @0)))
+     (let (lam (app @2 (app @1 @0)))
+      (app @2 (app @1 (app @0 0))))))
+    "
+    =>
+    "6"
+}
+
+egg::test_fn! {
     dbsmallstep_compose, rules(),
     "(let
         (lam (lam (lam (app @2 (app @1 @0)))))
@@ -526,9 +551,20 @@ egg::test_fn! {
         )
     )"
     =>
-    // "(app (app (lam (lam (lam (app @2 (app @1 @0))))) ?x) ?x)",
-    // "(app (app (lam (lam (lam (app @2 (app @1 @0))))) (lam (+ @0 1))) (lam (+ @0 1)))",
     "(lam (+ @0 2))"
+}
+
+egg::test_fn! {
+    dbsmallstep_compose_2, rules(),
+    "(let
+        (lam (lam (lam (app @2 (app @1 @0)))))
+        (let
+            (lam (+ @0 1))
+            (app (app @1 (app (app @1 @0) @0)) @0)
+        )
+    )"
+    =>
+    "(lam (+ @0 3))"
 }
 
 egg::test_fn! {
@@ -560,10 +596,10 @@ egg::test_fn! {
 egg::test_fn! {
     dbsmallstep_compose_many_many_1_small, rules(),
     "(let (lam (lam (lam (app @2 (app @1 @0)))))
+     (let (lam (app (app @1 @0) @0))
      (let (lam (+ @0 1))
-     (let (lam (app (app @2 @0) @0))
-     (app @0
-       @1))))"
+     (app @1
+       @0))))"
     =>
     "(lam (+ @0 2))"
 }
