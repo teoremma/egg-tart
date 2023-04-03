@@ -130,8 +130,13 @@ struct DeBruijnAnalysis;
 
 #[derive(Debug)]
 struct Data {
+    /// Is the e-class a constant?
     constant: Option<(DeBruijn, PatternAst<DeBruijn>)>,
+    /// Is the e-class an index?
     index: Option<DeBruijnIndex>,
+    /// The greatest free index contained in this e-class (possibly - and most
+    /// likely - farther down in the e-graph)
+    max_free_index: Option<DeBruijnIndex>,
 }
 
 fn eval_constant(egraph: &EGraph, enode: &DeBruijn) -> Option<(DeBruijn, PatternAst<DeBruijn>)> {
@@ -151,9 +156,12 @@ fn eval_constant(egraph: &EGraph, enode: &DeBruijn) -> Option<(DeBruijn, Pattern
     }
 }
 
-fn eval_index(enode: &DeBruijn) -> Option<DeBruijnIndex> {
+fn eval_index(egraph: &EGraph, enode: &DeBruijn) -> Option<DeBruijnIndex> {
     match enode {
         DeBruijn::Index(i) => Some(*i),
+        // TODO: fix this if we add the small step for shift back (we need to
+        // conditionally increment the index)
+        DeBruijn::Shift([_min_index, index]) => egraph[*index].data.index.map(|i| i.increment()),
         _ => None,
     }
 }
@@ -169,13 +177,69 @@ impl Analysis<DeBruijn> for DeBruijnAnalysis {
             assert_eq!(a.0, b.0, "Merged non-equal indices");
             DidMerge(false, false)
         });
-        res1 | res2
+        let res3 = merge_option(&mut to.max_free_index, from.max_free_index, |i1, i2| {
+            let old_i1 = i1.0;
+            *i1 = DeBruijnIndex(std::cmp::max(i1.0, i2.0));
+            DidMerge(i1.0 == old_i1, i2 == *i1)
+        });
+        res1 | res2 | res3
     }
 
     fn make(egraph: &EGraph, enode: &DeBruijn) -> Data {
         let constant = eval_constant(egraph, enode);
-        let index = eval_index(enode);
-        Data { constant, index }
+        let index = eval_index(egraph, enode);
+        let max_free_index = match enode {
+            DeBruijn::Index(i) => Some(*i),
+            DeBruijn::Shift([_min_index, index]) => egraph[*index].data.max_free_index.map(|i| i.increment()),
+            DeBruijn::Lam([body]) | DeBruijn::Fix([body]) => egraph[*body].data.max_free_index.and_then(|i| {
+                if i.0 == 0 {
+                    None
+                } else {
+                    Some(i.decrement())
+                }
+            }),
+            DeBruijn::Let([value, body]) => {
+                let max_free_index_in_body = egraph[*body].data.max_free_index.and_then(|i| {
+                    if i.0 == 0 {
+                        None
+                    } else {
+                        Some(i.decrement())
+                    }
+                });
+                let max_free_index_in_value = egraph[*value].data.max_free_index;
+                std::cmp::max(max_free_index_in_body, max_free_index_in_value)
+            }
+            DeBruijn::Sub([index, _e, body]) => {
+                // e is assumed closed
+                // index is assumed a valid index
+                let dbi = egraph[*index].data.index.unwrap();
+                let max_free_index_in_body = egraph[*body].data.max_free_index;
+                max_free_index_in_body.and_then(|index| {
+                    // If the max index is the same as the index to substitute over, then
+                    // we need to decrease it because it's bound.
+                    if index.0 == 0 {
+                        None
+                    } else {
+                        Some(index.decrement())
+                    }
+                    // if index == dbi {
+                    //     if index.0 == 0 {
+                    //         None
+                    //     } else {
+                    //         Some(index.decrement())
+                    //     }
+                    // } else {
+                    //     Some(index)
+                    // }
+                })
+            }
+            _ => {
+                enode.children().iter().fold(None, |acc, id| {
+                    std::cmp::max(acc, egraph[*id].data.max_free_index)
+                })
+            }
+        };
+        Data { constant, index, max_free_index }
     }
 
     fn modify(egraph: &mut EGraph, id: Id) {
@@ -217,6 +281,12 @@ fn is_both_index(i1: Var, i2: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
     move |egraph, _, subst| {
         egraph[subst[i1]].data.index.is_some()
         && egraph[subst[i2]].data.index.is_some()
+    }
+}
+
+fn is_closed_term(v: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
+    move |egraph, _, subst| {
+        egraph[subst[v]].data.max_free_index.is_none()
     }
 }
 
@@ -284,15 +354,27 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
         rw!("sub-let"; "(sub ?i ?e1 (let ?v ?e2))" => {
             DestructiveRewrite {
                 original_pattern: "(sub ?i ?e1 (let ?v ?e2))".parse().unwrap(),
-                add_pattern: "(let ?v (sub (shift @0 ?i) (shift @0 ?e1) ?e2))".parse().unwrap(),
+                add_pattern: "(let ?v (sub (shift @0 ?i) ?e1 ?e2))".parse().unwrap(),
             }
-        }),
+        } if is_closed_term(var("?e1"))),
         rw!("sub-lam"; "(sub ?i ?e1 (lam ?body))" => {
             DestructiveRewrite {
                 original_pattern: "(sub ?i ?e1 (lam ?body))".parse().unwrap(),
-                add_pattern: "(lam (sub (shift @0 ?i) (shift @0 ?e1) ?body))".parse().unwrap(),
+                add_pattern: "(lam (sub (shift @0 ?i) ?e1 ?body))".parse().unwrap(),
             }
-        }),
+        } if is_closed_term(var("?e1"))),
+        // rw!("sub-let"; "(sub ?i ?e1 (let ?v ?e2))" => {
+        //     DestructiveRewrite {
+        //         original_pattern: "(sub ?i ?e1 (let ?v ?e2))".parse().unwrap(),
+        //         add_pattern: "(let ?v (sub (shift @0 ?i) (shift @0 ?e1) ?e2))".parse().unwrap(),
+        //     }
+        // }),
+        // rw!("sub-lam"; "(sub ?i ?e1 (lam ?body))" => {
+        //     DestructiveRewrite {
+        //         original_pattern: "(sub ?i ?e1 (lam ?body))".parse().unwrap(),
+        //         add_pattern: "(lam (sub (shift @0 ?i) (shift @0 ?e1) ?body))".parse().unwrap(),
+        //     }
+        // }),
         // shifting - this is to shift free variables when we substitute over a lambda/let/fix.
         rw!("shift";    "(shift ?i1 ?i2)"  => { ShiftIndex { min_index: var("?i1"), index: var("?i2") }} if is_both_index(var("?i1"), var("?i2"))),
         rw!("shift-const"; "(shift ?i ?c)" => {
