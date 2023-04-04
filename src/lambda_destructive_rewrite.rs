@@ -92,6 +92,7 @@ impl Analysis<Lambda> for LambdaAnalysis {
         // compare lengths to see if I changed to or from
         DidMerge(
             before_len != to.free.len(),
+            // true,
             to.free.len() != from.free.len(),
         ) | merge_option(&mut to.constant, from.constant, |a, b| {
             assert_eq!(a.0, b.0, "Merged non-equal constants");
@@ -150,6 +151,10 @@ fn is_const(v: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
     move |egraph, _, subst| egraph[subst[v]].data.constant.is_some()
 }
 
+fn is_not_free_in(sym_var: Var, body_var: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
+    move |egraph, _, subst| !egraph[subst[body_var]].data.free.contains(&subst[sym_var])
+}
+
 fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
     vec![
         // open term rules
@@ -187,6 +192,12 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
                 add_pattern: "(let ?v ?e ?body)".parse().unwrap(),
             }
         }),
+        rw!("let-not-free";  "(let ?v ?e ?body)" => {
+            DestructiveRewrite {
+                original_pattern: "(let ?v ?e ?body)".parse().unwrap(),
+                add_pattern: "?body".parse().unwrap(),
+            }
+        } if is_not_free_in(var("?v"), var("?body"))),
         rw!("let-app";  "(let ?v ?e (app ?a ?b))" => {
             DestructiveRewrite {
                 original_pattern: "(let ?v ?e (app ?a ?b))".parse().unwrap(),
