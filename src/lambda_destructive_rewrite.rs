@@ -146,8 +146,22 @@ fn is_not_same_var(v1: Var, v2: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool
     move |egraph, _, subst| egraph.find(subst[v1]) != egraph.find(subst[v2])
 }
 
+/// Checks if v1 and v1 are not the same and also if v1 is free in body
+fn is_not_same_var_and_free_in_body(v1: Var, v2: Var, body: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
+    move |egraph, _, subst| egraph.find(subst[v1]) != egraph.find(subst[v2])
+        && egraph[subst[body]].data.free.contains(&subst[v1])
+}
+
 fn is_const(v: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
     move |egraph, _, subst| egraph[subst[v]].data.constant.is_some()
+}
+
+fn is_free_in_vars(v: Var, vars: Vec<Var>)  -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
+    move |egraph, _, subst| vars.iter().any(|body| egraph[subst[*body]].data.free.contains(&subst[v]))
+}
+
+fn is_free_in(v: Var, body: Var)  -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
+    move |egraph, _, subst| egraph[subst[body]].data.free.contains(&subst[v])
 }
 
 fn is_not_free_in(v: Var, body: Var)  -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
@@ -202,19 +216,22 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
                 original_pattern: "(let ?v ?e (app ?a ?b))".parse().unwrap(),
                 add_pattern: "(app (let ?v ?e ?a) (let ?v ?e ?b))".parse().unwrap(),
             }
-        }),
+        // }),
+        } if is_free_in_vars(var("?v"), vec!(var("?a"), var("?b")))),
         rw!("let-add";  "(let ?v ?e (+   ?a ?b))" => {
             DestructiveRewrite {
                 original_pattern: "(let ?v ?e (+   ?a ?b))".parse().unwrap(),
                 add_pattern: "(+   (let ?v ?e ?a) (let ?v ?e ?b))".parse().unwrap(),
             }
-        }),
+        // }),
+        } if is_free_in_vars(var("?v"), vec!(var("?a"), var("?b")))),
         rw!("let-eq";   "(let ?v ?e (=   ?a ?b))" => {
             DestructiveRewrite {
                 original_pattern: "(let ?v ?e (=   ?a ?b))".parse().unwrap(),
                 add_pattern: "(=   (let ?v ?e ?a) (let ?v ?e ?b))".parse().unwrap(),
             }
-        }),
+        // }),
+        } if is_free_in_vars(var("?v"), vec!(var("?a"), var("?b")))),
         rw!("let-const";
             "(let ?v ?e ?c)" => {
             DestructiveRewrite {
@@ -228,8 +245,8 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
                     original_pattern: "(let ?v ?e (if ?cond ?then ?else))".parse().unwrap(),
                     add_pattern: "(if (let ?v ?e ?cond) (let ?v ?e ?then) (let ?v ?e ?else))".parse().unwrap(),
                 }
-            }
-        ),
+        // }),
+        } if is_free_in_vars(var("?v"), vec!(var("?cond"), var("?then"), var("?else")))),
         rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => {
             DestructiveRewrite {
                 original_pattern: "(let ?v1 ?e (var ?v1))".parse().unwrap(),
@@ -256,7 +273,8 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
                 if_not_free: "(lam ?v2 (let ?v1 ?e ?body))".parse().unwrap(),
                 if_free: "(lam ?fresh (let ?v1 ?e (let ?v2 (var ?fresh) ?body)))".parse().unwrap(),
             }}
-            if is_not_same_var(var("?v1"), var("?v2"))),
+            if is_not_same_var_and_free_in_body(var("?v1"), var("?v2"), var("?body"))),
+            // if is_not_same_var(var("?v1"), var("?v2"))),
     ]
 }
 
