@@ -87,12 +87,12 @@ impl Analysis<Lambda> for LambdaAnalysis {
     type Data = Data;
     fn merge(&mut self, to: &mut Data, from: Data) -> DidMerge {
         let before_len = to.free.len();
-        to.free.extend(from.free);
-        // to.free.retain(|i| from.free.contains(i));
+        // to.free.extend(from.free);
+        to.free.retain(|i| from.free.contains(i));
         // compare lengths to see if I changed to or from
         DidMerge(
             before_len != to.free.len(),
-            true // to.free.len() != from.free.len(),
+            to.free.len() != from.free.len(),
         ) | merge_option(&mut to.constant, from.constant, |a, b| {
             assert_eq!(a.0, b.0, "Merged non-equal constants");
             DidMerge(false, false)
@@ -575,7 +575,7 @@ egg::test_fn! {
      (app (var double)
          (var add1)))))))))))))"
     =>
-    "(lam ?x (+ (var ?x) 256))"
+    "(lam ?x (+ (var ?x) 512))"
 }
 
 // 8 doubles times out for CallByName
@@ -631,11 +631,10 @@ egg::test_fn! {
          (app (var double)
          (app (var double)
          (app (var double)
-         (app (var double)
-              (var double)))))
+              (var double))))
          (var add1)))))"
     =>
-    "(lam ?x (+ (var ?x) 32))"
+    "(lam ?x (+ (var ?x) 16))"
 }
 
 egg::test_fn! {

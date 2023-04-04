@@ -413,7 +413,7 @@ phased_test_fn! {
 // (with 7 doubles, takes ~20s)
 // (sketch guided takes ~90s with 4 doubles)
 phased_test_fn! {
-    lambda_dr_compose_many_many_1,
+    lambda_phased_compose_many_many_1,
     "(let compose (lam f (lam g (lam x (app (var f)
                                        (app (var g) (var x))))))
      (let double (lam f (app (app (var compose) (var f)) (var f)))
