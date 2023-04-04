@@ -1,5 +1,6 @@
 use egg::{rewrite as rw, *};
 use fxhash::FxHashSet as HashSet;
+use fxhash::FxHashMap as HashMap;
 use std::fmt::Display;
 use std::str::FromStr;
 use crate::benchmarks;
@@ -130,6 +131,7 @@ struct DeBruijnAnalysis;
 
 #[derive(Debug)]
 struct Data {
+    previous_rewrites: HashSet<(Symbol, Subst, PatternAst<DeBruijn>)>,
     constant: Option<(DeBruijn, PatternAst<DeBruijn>)>,
 }
 
@@ -161,7 +163,7 @@ impl Analysis<DeBruijn> for DeBruijnAnalysis {
 
     fn make(egraph: &EGraph, enode: &DeBruijn) -> Data {
         let constant = eval(egraph, enode);
-        Data { constant }
+        Data { constant, previous_rewrites: HashSet::default() }
     }
 
     fn modify(egraph: &mut EGraph, id: Id) {
@@ -241,6 +243,156 @@ fn rules() -> Vec<Rewrite<DeBruijn, DeBruijnAnalysis>> {
         rw!("shift-lam"; "(shift ?i (lam ?e))" => "(lam (shift (shift ?i ?i) ?e))"),
         rw!("shift-fix"; "(shift ?i (fix ?e))" => "(fix (shift (shift ?i ?i) ?e))"),
     ]
+}
+
+// TODO: this and its applier can probably be generalized over languages L that
+// implement match_enode
+struct DestructiveRewrite {
+    original_pattern: Pattern<DeBruijn>,
+    add_pattern: Pattern<DeBruijn>,
+}
+
+impl Applier<DeBruijn, DeBruijnAnalysis> for DestructiveRewrite {
+    fn apply_one(
+        &self,
+        egraph: &mut egg::EGraph<DeBruijn, DeBruijnAnalysis>,
+        eclass: Id,
+        subst: &Subst,
+        searcher_ast: Option<&PatternAst<DeBruijn>>,
+        rule_name: Symbol,
+    ) -> Vec<Id> {
+        let memo = (rule_name, subst.clone(), self.original_pattern.ast.clone());
+        if egraph[eclass].data.previous_rewrites.contains(&memo) {
+            return vec!();
+        }
+        egraph[eclass].data.previous_rewrites.insert(memo);
+        let mut ids = self.add_pattern.apply_one(egraph, eclass, subst, searcher_ast, rule_name);
+        if prune_enodes_matching(egraph, &self.original_pattern.ast, subst, &eclass, rule_name) {
+            ids.push(eclass);
+        }
+        ids
+    }
+}
+
+/// Removes enodes matching the rec_expr from the egraph.
+///
+/// I think that we could do slightly better than a HashMap by having a mutable
+/// RecExpr and storing which Ids we've visited on the nodes, but the difference
+/// between passing around clones of a HashMap/HashSet everywhere and using a
+/// single mutable HashMap is minimal in my testing (0.2s for a test taking 9s -
+/// although this was just a single test).
+fn prune_enodes_matching(egraph: &mut egg::EGraph<DeBruijn, DeBruijnAnalysis>, rec_expr: &RecExpr<ENodeOrVar<DeBruijn>>, subst: &Subst, eclass: &Id, rule_name: Symbol) -> bool {
+    let dr_enabled = match rule_name.as_str() {
+        "if-true" => true,
+        "if-false" => true,
+        "if-elim" => true,
+        "beta" => false,
+        "let-app" => true,
+        "let-add" => true,
+        "let-eq" => true,
+        "let-const" => true,
+        "let-if" => false,
+        "let-var-same" => true,
+        "let-var-diff" => true,
+        "let-lam-same" => false,
+        "let-lam-diff" => false,
+        _ => false,
+    };
+    if !dr_enabled {
+        return false;
+    }
+    let mut memo = HashMap::default();
+    let rec_expr_id: Id = (rec_expr.as_ref().len() - 1).into();
+    // Handles cycles - if we get back here then it matches.
+    memo.insert((rec_expr_id, *eclass), true);
+    let original_len = egraph[*eclass].nodes.len();
+
+    if original_len == 1 {
+        return false;
+    }
+    egraph[*eclass].nodes = egraph[*eclass].nodes
+        .to_owned()
+        .into_iter()
+        .filter(|node| {
+            let res = match_enode(egraph, &rec_expr, &rec_expr_id, subst, node, &mut memo);
+            // if res {
+            //     // println!("{} filtering node {:?}", rule_name, node)
+            // }
+            !res
+        })
+        .collect();
+    original_len > egraph[*eclass].nodes.len()
+}
+
+/// This function recursively traverses the rec_expr and enode in lock step. If
+/// they have matching constants, then we can simply check their equality. Most
+/// of the cases, however, come from recursively checking the contained rec_expr
+/// nodes against contained eclasses.
+fn match_enode(egraph: &egg::EGraph<DeBruijn, DeBruijnAnalysis>, rec_expr: &RecExpr<ENodeOrVar<DeBruijn>>, rec_expr_id: &Id, subst: &Subst, enode: &DeBruijn, memo: &mut HashMap<(Id, Id), bool>) -> bool {
+    match &rec_expr[*rec_expr_id] {
+        ENodeOrVar::ENode(n) => {
+            match (n, enode) {
+                // First base cases are when leaves of the expressions match
+                (DeBruijn::Bool(b_re), DeBruijn::Bool(b)) => b_re == b,
+                (DeBruijn::Num(n_re), DeBruijn::Num(n)) => n_re == n,
+                (DeBruijn::Index(dbi_re), DeBruijn::Index(dbi)) => dbi_re == dbi,
+                // Recursive cases
+                (DeBruijn::Add([n1_re, n2_re]), DeBruijn::Add([n1, n2])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, n1_re, subst, n1, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, n2_re, subst, n2, memo),
+                (DeBruijn::App([e1_re, e2_re]), DeBruijn::App([e1, e2])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, e1_re, subst, e1, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, e2_re, subst, e2, memo),
+                (DeBruijn::Lam([body_re]), DeBruijn::Lam([body])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, body_re, subst, body, memo),
+                (DeBruijn::Let([v_re, e_re]), DeBruijn::Let([v, e])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, v_re, subst, v, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, e_re, subst, e, memo),
+                (DeBruijn::Fix([e_re]), DeBruijn::Fix([e])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, e_re, subst, e, memo),
+                (DeBruijn::If([b_re, e1_re, e2_re]), DeBruijn::If([b, e1, e2])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, b_re, subst, b, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, e1_re, subst, e1, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, e2_re, subst, e2, memo),
+                (DeBruijn::Sub([dbi_re, e_re, body_re]), DeBruijn::Sub([dbi, e, body])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, dbi_re, subst, dbi, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, e_re, subst, e, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, body_re, subst, body, memo),
+                (DeBruijn::Shift([dbi1_re, dbi2_re]), DeBruijn::Shift([dbi1, dbi2])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, dbi1_re, subst, dbi1, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, dbi2_re, subst, dbi2, memo),
+                _ => false
+            }
+        }
+        // I think this is incomparable - an enode is not an eclass. Perhaps
+        // they are equal if the enode is in the eclass? I kind of don't think
+        // so.
+        ENodeOrVar::Var(_) => false,
+    }
+}
+
+/// In this case, we have a concrete AST node (ENodeOrVar::EnNode) or Var
+/// (ENodeOrVar::Var) in the rec_expr that we want to compare to an entire
+/// eclass. Comparing a Var to an eclass is a base case - we just check to see
+/// if they're the same. Otherwise, we need to check if there is any enode in
+/// the class that we can match with the concrete AST node.
+fn any_enode_in_eclass_matches(egraph: &egg::EGraph<DeBruijn, DeBruijnAnalysis>, rec_expr: &RecExpr<ENodeOrVar<DeBruijn>>, rec_expr_id: &Id, subst: &Subst, eclass: &Id, memo: &mut HashMap<(Id, Id), bool>) -> bool {
+    if let Some(res) = memo.get(&(*rec_expr_id, *eclass)) {
+        return *res
+    }
+    let res = {
+        // This is the second and last base case (aside from cycles) where we can
+        // conclude a pattern matches.
+        if let ENodeOrVar::Var(v) = rec_expr[*rec_expr_id] {
+            return subst[v] == *eclass;
+        }
+        // If we cycle back to this node, then the pattern matches.
+        memo.insert((*rec_expr_id, *eclass), true);
+        egraph[*eclass].iter().any(|node| match_enode(egraph, rec_expr, &rec_expr_id, subst, node, memo))
+    };
+    // Update the memo since we only set it to 'true' temporarily to handle cycles.
+    memo.insert((*rec_expr_id, *eclass), res);
+    res
 }
 
 struct ShiftIndex {
