@@ -87,12 +87,12 @@ impl Analysis<Lambda> for LambdaAnalysis {
     type Data = Data;
     fn merge(&mut self, to: &mut Data, from: Data) -> DidMerge {
         let before_len = to.free.len();
-        // to.free.extend(from.free);
-        to.free.retain(|i| from.free.contains(i));
+        to.free.extend(from.free);
+        // to.free.retain(|i| from.free.contains(i));
         // compare lengths to see if I changed to or from
         DidMerge(
             before_len != to.free.len(),
-            to.free.len() != from.free.len(),
+            true // to.free.len() != from.free.len(),
         ) | merge_option(&mut to.constant, from.constant, |a, b| {
             assert_eq!(a.0, b.0, "Merged non-equal constants");
             DidMerge(false, false)
@@ -150,6 +150,10 @@ fn is_const(v: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
     move |egraph, _, subst| egraph[subst[v]].data.constant.is_some()
 }
 
+fn is_not_free_in(v: Var, body: Var)  -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
+    move |egraph, _, subst| !egraph[subst[body]].data.free.contains(&subst[v])
+}
+
 fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
     vec![
         // open term rules
@@ -187,6 +191,12 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
                 add_pattern: "(let ?v ?e ?body)".parse().unwrap(),
             }
         }),
+        rw!("let-not-free";  "(let ?v ?e ?body)" => {
+            DestructiveRewrite {
+                original_pattern: "(let ?v ?e ?body)".parse().unwrap(),
+                add_pattern: "?body".parse().unwrap(),
+            }
+        } if is_not_free_in(var("?v"), var("?body"))),
         rw!("let-app";  "(let ?v ?e (app ?a ?b))" => {
             DestructiveRewrite {
                 original_pattern: "(let ?v ?e (app ?a ?b))".parse().unwrap(),
@@ -301,6 +311,7 @@ fn prune_enodes_matching(egraph: &mut egg::EGraph<Lambda, LambdaAnalysis>, rec_e
         "let-var-diff" => true,
         "let-lam-same" => false,
         "let-lam-diff" => false,
+        "let-not-free" => true,
         _ => false,
     };
     if !dr_enabled {
