@@ -62,6 +62,7 @@ struct LambdaAnalysis;
 struct Data {
     free: HashSet<Id>,
     constant: Option<(Lambda, PatternAst<Lambda>)>,
+    previous_rewrites: HashSet<(Symbol, Subst, PatternAst<Lambda>)>,
 }
 
 fn eval(egraph: &EGraph, enode: &Lambda) -> Option<(Lambda, PatternAst<Lambda>)> {
@@ -116,7 +117,7 @@ impl Analysis<Lambda> for LambdaAnalysis {
             _ => enode.for_each(|c| free.extend(&egraph[c].data.free)),
         }
         let constant = eval(egraph, enode);
-        Data { constant, free }
+        Data { constant, free, previous_rewrites: HashSet::default() }
     }
 
     fn modify(egraph: &mut EGraph, id: Id) {
@@ -162,17 +163,19 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
         rw!("fix";      "(fix ?v ?e)"             => "(let ?v (fix ?v ?e) ?e)"),
         // rw!("beta";     "(app (lam ?v ?body) ?e)" => "(let ?v ?e ?body)"),
         rw!("beta";     "(app (lam ?v ?body) ?e)" => {
-            { SketchGuidedBetaReduction {
+            { CallByName {
                 v: var("?v"),
                 e: var("?e"),
                 body: var("?body"),
+                original_pattern: "(app (lam ?v ?body) ?e)".parse().unwrap(),
             }}
         }),
         rw!("let";      "(let ?v ?e ?body)" => {
-            { SketchGuidedBetaReduction {
+            { CallByName {
                 v: var("?v"),
                 e: var("?e"),
                 body: var("?body"),
+                original_pattern: "(let ?v ?e ?body)".parse().unwrap(),
             }}
         }),
         // rw!("let-app";  "(let ?v ?e (app ?a ?b))" => "(app (let ?v ?e ?a) (let ?v ?e ?b))"),
@@ -344,18 +347,23 @@ struct CallByName {
     v: Var,
     e: Var,
     body: Var,
+    original_pattern: Pattern<Lambda>,
 }
 fn substitute(
     egraph: &mut EGraph,
+    subst_sym_id: Id,
     subst_sym: Symbol,
     subst_e: Id,
     target_eclass: Id,
     memo: &mut HashMap<Id, Option<HashSet<Id>>>,
 ) -> HashSet<Id> {
-    // if !egraph[target_eclass].data.free.contains(&v) {
-
-    //     return vec!()
-    // }
+    if !egraph[target_eclass].data.free.contains(&subst_sym_id) {
+        // println!("can't substitute {} on {} because it's not free", subst_sym_id, target_eclass);
+        // memo.insert(target_eclass, Some(target_eclass));
+        let mut res = HashSet::default();
+        res.insert(target_eclass);
+        return res
+    }
     if let Some(result) = memo.get(&target_eclass) {
         match result {
             Some(cached_value) => return cached_value.clone(),
@@ -372,8 +380,8 @@ fn substitute(
     for lambda_term in egraph[target_eclass].nodes.clone() {
         match lambda_term {
             Lambda::App([e1, e2]) => {
-                let subst_e1s = substitute(egraph, subst_sym, subst_e, e1, memo);
-                let subst_e2s = substitute(egraph, subst_sym, subst_e, e2, memo);
+                let subst_e1s = substitute(egraph, subst_sym_id, subst_sym, subst_e, e1, memo);
+                let subst_e2s = substitute(egraph, subst_sym_id, subst_sym, subst_e, e2, memo);
                 for e1 in &subst_e1s {
                     for e2 in &subst_e2s {
                         new_ids.insert(egraph.add(Lambda::App([*e1, *e2])));
@@ -381,8 +389,8 @@ fn substitute(
                 }
             }
             Lambda::Add([e1, e2]) => {
-                let subst_e1s = substitute(egraph, subst_sym, subst_e, e1, memo);
-                let subst_e2s = substitute(egraph, subst_sym, subst_e, e2, memo);
+                let subst_e1s = substitute(egraph, subst_sym_id, subst_sym, subst_e, e1, memo);
+                let subst_e2s = substitute(egraph, subst_sym_id, subst_sym, subst_e, e2, memo);
                 for e1 in &subst_e1s {
                     for e2 in &subst_e2s {
                         new_ids.insert(egraph.add(Lambda::Add([*e1, *e2])));
@@ -402,13 +410,13 @@ fn substitute(
                     let fresh_sym_id = egraph.add(fresh_sym);
                     let fresh_sym_var_id = egraph.add(Lambda::Var(fresh_sym_id));
                     // println!("fresh sym_var_id: {:?}, fresh sym_id: {:?}", fresh_sym_var_id, fresh_sym_id);
-                    let fresh_e2s = substitute(egraph, sym, fresh_sym_var_id, e2, &mut HashMap::default());
+                    let fresh_e2s = substitute(egraph, e1, sym, fresh_sym_var_id, e2, &mut HashMap::default());
                     // Can't be done without a termporary variable because
                     // egraph would be borrowed twice. Probably better to not
                     // collect and use an iterator.
                     let subst_e2s: HashSet<Id> = fresh_e2s
                         .iter()
-                        .flat_map(|fresh_e2| substitute(egraph, subst_sym, subst_e, *fresh_e2, memo))
+                        .flat_map(|fresh_e2| substitute(egraph, subst_sym_id, subst_sym, subst_e, *fresh_e2, memo))
                         .collect();
                     for subst_e2 in &subst_e2s {
                         new_ids.insert(egraph.add(Lambda::Lambda([fresh_sym_id, *subst_e2])));
@@ -419,7 +427,7 @@ fn substitute(
                     // egraph.union(target_eclass, fresh_lam);
 
                 } else {
-                    for subst_e2 in &substitute(egraph, subst_sym, subst_e, e2, memo) {
+                    for subst_e2 in &substitute(egraph, subst_sym_id, subst_sym, subst_e, e2, memo) {
                         new_ids.insert(egraph.add(Lambda::Lambda([e1, *subst_e2])));
                     }
                 }
@@ -437,18 +445,18 @@ fn substitute(
                     let fresh_sym_id = egraph.add(fresh_sym);
                     let fresh_sym_var_id = egraph.add(Lambda::Var(fresh_sym_id));
                     // println!("fresh sym_var_id: {:?}, fresh sym_id: {:?}", fresh_sym_var_id, fresh_sym_id);
-                    let fresh_e2s = substitute(egraph, sym, fresh_sym_var_id, e2, &mut HashMap::default());
+                    let fresh_e2s = substitute(egraph, e1, sym, fresh_sym_var_id, e2, &mut HashMap::default());
                     // Can't be done without a termporary variable because
                     // egraph would be borrowed twice. Probably better to not
                     // collect and use an iterator.
                     let subst_e2s: HashSet<Id> = fresh_e2s
                         .iter()
-                        .flat_map(|fresh_e2| substitute(egraph, subst_sym, subst_e, *fresh_e2, memo))
+                        .flat_map(|fresh_e2| substitute(egraph, subst_sym_id, subst_sym, subst_e, *fresh_e2, memo))
                         .collect();
-                    let fresh_e3s = substitute(egraph, sym, fresh_sym_var_id, e3, &mut HashMap::default());
+                    let fresh_e3s = substitute(egraph, e1, sym, fresh_sym_var_id, e3, &mut HashMap::default());
                     let subst_e3s: HashSet<Id> = fresh_e3s
                         .iter()
-                        .flat_map(|fresh_e3| substitute(egraph, subst_sym, subst_e, *fresh_e3, memo))
+                        .flat_map(|fresh_e3| substitute(egraph, subst_sym_id, subst_sym, subst_e, *fresh_e3, memo))
                         .collect();
                     for subst_e2 in &subst_e2s {
                         for subst_e3 in &subst_e3s {
@@ -461,8 +469,8 @@ fn substitute(
                     // egraph.union(target_eclass, fresh_lam);
 
                 } else {
-                    let subst_e2s = substitute(egraph, subst_sym, subst_e, e2, memo);
-                    let subst_e3s = substitute(egraph, subst_sym, subst_e, e3, memo);
+                    let subst_e2s = substitute(egraph, subst_sym_id, subst_sym, subst_e, e2, memo);
+                    let subst_e3s = substitute(egraph, subst_sym_id, subst_sym, subst_e, e3, memo);
                     for subst_e2 in &subst_e2s {
                         for subst_e3 in &subst_e3s {
                             new_ids.insert(egraph.add(Lambda::Let([e1, *subst_e2, *subst_e3])));
@@ -480,7 +488,7 @@ fn substitute(
                         }
                     },
                     _ => {
-                        for e in &substitute(egraph, subst_sym, subst_e, id, memo) {
+                        for e in &substitute(egraph, subst_sym_id, subst_sym, subst_e, id, memo) {
                             new_ids.insert(egraph.add(Lambda::Var(*e)));
                         }
                     }
@@ -508,15 +516,21 @@ impl Applier<Lambda, LambdaAnalysis> for CallByName {
         eclass: Id,
         subst: &Subst,
         _searcher_ast: Option<&PatternAst<Lambda>>,
-        _rule_name: Symbol,
+        rule_name: Symbol,
     ) -> Vec<Id> {
+        let memo = (rule_name, subst.clone(), self.original_pattern.ast.clone());
+        if egraph[eclass].data.previous_rewrites.contains(&memo) {
+            return vec!();
+        }
+        egraph[eclass].data.previous_rewrites.insert(memo);
         // println!("eclass: {:?}, subst_v: {:?}, subst_e: {:?}, subst_body: {:?}", eclass, subst[self.v], subst[self.e], subst[self.body]);
         let subst_sym = get_sym(subst[self.v], egraph);
-        let new_ids = substitute(egraph, subst_sym, subst[self.e], subst[self.body], &mut HashMap::default());
+        let new_ids = substitute(egraph, subst[self.v], subst_sym, subst[self.e], subst[self.body], &mut HashMap::default());
         for id in &new_ids {
             egraph.union(eclass, *id);
         }
         // println!("eclass: {:?}, subst_sym: {:?}, subst_e: {:?}, subst_body: {:?}, new_ids: {:?}", eclass, subst_sym, subst[self.e], subst[self.body], new_ids.clone());
+        // println!("egraph: {:?}", egraph);
         new_ids.into_iter().collect()
     }
 }
@@ -661,9 +675,10 @@ egg::test_fn! {
      (app (var double)
      (app (var double)
      (app (var double)
-         (var add1))))))))))))"
+     (app (var double)
+         (var add1)))))))))))))"
     =>
-    "(lam ?x (+ (var ?x) 256))"
+    "(lam ?x (+ (var ?x) 512))"
 }
 
 // 8 doubles times out for CallByName
@@ -813,7 +828,7 @@ egg::test_fn! {
 }
 
 egg::test_fn! {
-    lambda_fib, rules(),
+    lambda_just_fib, rules(),
     runner = Runner::default()
         .with_iter_limit(60)
         .with_node_limit(500_000),
