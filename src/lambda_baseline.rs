@@ -614,3 +614,18 @@ fn lambda_map_fission() {
 
     benchmarks::test_runner(&runner_name, Some(runner), &rules(), start, &[goal], None, true);
 }
+
+#[test]
+fn lambda_map_fusion_many() {
+    let range = 1..20;
+    for n in range {
+        let (start, goal) = benchmarks::map_fusion_sexprs(n);
+        let start = start.parse().unwrap();
+        let goal = goal.parse().unwrap();
+        let runner_name = std::format!("lambda_map_fusion_{n}");
+        eprintln!("####### {}", runner_name);
+
+        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+        eprintln!("\n\n\n")
+    }
+}

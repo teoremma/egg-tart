@@ -20,6 +20,8 @@ define_language! {
 
         "if" = If([Id; 3]),
 
+        "map" = Map([Id; 1]),
+
         Symbol(egg::Symbol),
     }
 }
@@ -44,6 +46,7 @@ impl Lambda {
             Lambda::Fix([id1, id2]) => Lambda::Fix([increment_id(*id1, increment), increment_id(*id2, increment)]),
             Lambda::If([id1, id2, id3]) =>
                 Lambda::If([increment_id(*id1, increment), increment_id(*id2, increment), increment_id(*id3, increment)]),
+            Lambda::Map([id]) => Lambda::Map([increment_id(*id, increment)]),
             Lambda::Bool(_) | Lambda::Num(_) | Lambda::Symbol(_) => self.to_owned()
         }
     }
@@ -247,6 +250,12 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
                 if_free: "(lam ?fresh (let ?v1 ?e (let ?v2 (var ?fresh) ?body)))".parse().unwrap(),
             }}
             if is_not_same_var(var("?v1"), var("?v2"))),
+        rw!("map-fusion";
+            "(app (map ?f) (app (map ?g) ?e))" =>
+            { MapFusionApplier {
+                fresh: var("?fresh"), 
+                fusion: "(app (map (lam ?fresh (app ?f (app ?g (var ?fresh))))) ?e)".parse().unwrap(),
+            }}),
     ]
 }
 
@@ -323,6 +332,28 @@ impl Applier<Lambda, LambdaAnalysis> for CaptureAvoid {
             ids.push(eclass);
         }
         ids
+    }
+}
+
+struct MapFusionApplier {
+    fresh: Var,
+    fusion: Pattern<Lambda>,
+}
+
+impl Applier<Lambda, LambdaAnalysis> for MapFusionApplier {
+    fn apply_one(
+        &self,
+        egraph: &mut EGraph,
+        eclass: Id,
+        subst: &Subst,
+        searcher_ast: Option<&PatternAst<Lambda>>,
+        rule_name: Symbol,
+    ) -> Vec<Id> {
+        let mut subst = subst.clone();
+        let sym = Lambda::Symbol(format!("_{}", eclass).into());
+        subst.insert(self.fresh, egraph.add(sym));
+        self.fusion
+            .apply_one(egraph, eclass, &subst, searcher_ast, rule_name)
     }
 }
 
@@ -665,6 +696,21 @@ fn lambda_dr_add_many_range() {
         let start = start.parse().unwrap();
         let goal = goal.parse().unwrap();
         let runner_name = std::format!("lambda_dr_add_many_{n}");
+        eprintln!("####### {}", runner_name);
+
+        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+        eprintln!("\n\n\n")
+    }
+}
+
+#[test]
+fn lambda_dr_map_fusion_many() {
+    let range = 1..50;
+    for n in range {
+        let (start, goal) = benchmarks::map_fusion_sexprs(n);
+        let start = start.parse().unwrap();
+        let goal = goal.parse().unwrap();
+        let runner_name = std::format!("lambda_map_fusion_{n}");
         eprintln!("####### {}", runner_name);
 
         benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
