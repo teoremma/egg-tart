@@ -19,8 +19,6 @@ define_language! {
 
         "if" = If([Id; 3]),
 
-        "map" = Map([Id; 1]),
-
         Symbol(egg::Symbol),
     }
 }
@@ -66,7 +64,7 @@ impl Analysis<Lambda> for LambdaAnalysis {
     type Data = Data;
     fn merge(&mut self, to: &mut Data, from: Data) -> DidMerge {
         let before_len = to.free.len();
-        // to.free.extend(from.free);
+        // to.free.extend(from.free.iter().copied());
         to.free.retain(|i| from.free.contains(i));
         // compare lengths to see if I changed to or from
         DidMerge(
@@ -90,6 +88,10 @@ impl Analysis<Lambda> for LambdaAnalysis {
                 free.remove(v);
                 free.extend(f(a));
             }
+            // Lambda::Lambda([v, a]) => {
+            //     free.extend(f(a));
+            //     free.remove(v);
+            // }
             Lambda::Lambda([v, a]) | Lambda::Fix([v, a]) => {
                 free.extend(f(a));
                 free.remove(v);
@@ -136,8 +138,8 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
         rw!("if-false"; "(if false ?then ?else)" => "?else"),
         rw!("if-elim"; "(if (= (var ?x) ?e) ?then ?else)" => "?else"
             if ConditionEqual::parse("(let ?x ?e ?then)", "(let ?x ?e ?else)")),
-        rw!("add-comm";  "(+ ?a ?b)"        => "(+ ?b ?a)"),
-        rw!("add-assoc"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
+        // rw!("add-comm";  "(+ ?a ?b)"        => "(+ ?b ?a)"),
+        // rw!("add-assoc"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
         rw!("eq-comm";   "(= ?a ?b)"        => "(= ?b ?a)"),
         // subst rules
         rw!("fix";      "(fix ?v ?e)"             => "(let ?v (fix ?v ?e) ?e)"),
@@ -163,26 +165,6 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
                 if_free: "(lam ?fresh (let ?v1 ?e (let ?v2 (var ?fresh) ?body)))".parse().unwrap(),
             }}
             if is_not_same_var(var("?v1"), var("?v2"))),
-        rw!("map-fusion";
-            "(app (map ?f) (app (map ?g) ?e))" =>
-            { MapFusionApplier {
-                fresh: var("?fresh"), 
-                fusion: "(app (map (lam ?fresh (app ?f (app ?g (var ?fresh))))) ?e)".parse().unwrap(),
-            }}),
-        rw!("map-fission";
-            "(map (lam ?x (app ?f (app ?g (var ?x)))))"
-            =>
-            { MapFissionApplier {
-                fresh: var("?fresh"), x: var("?x"), f: var("?f"),
-                // if x is free in f, fission is not possible
-                // keep the same pattern
-                if_free: "(map (lam ?x (app ?f (app ?g (var ?x)))))".parse().unwrap(),
-                if_not_free: "(lam ?fresh 
-                                (app (map ?f) 
-                                     (app (map (lam ?x 
-                                                    (app ?g (var ?x)))) 
-                                          (var ?fresh))))".parse().unwrap(),
-            }}),
     ]
 }
 
@@ -219,61 +201,6 @@ impl Applier<Lambda, LambdaAnalysis> for CaptureAvoid {
     }
 }
 
-struct MapFusionApplier {
-    fresh: Var,
-    fusion: Pattern<Lambda>,
-}
-
-impl Applier<Lambda, LambdaAnalysis> for MapFusionApplier {
-    fn apply_one(
-        &self,
-        egraph: &mut EGraph,
-        eclass: Id,
-        subst: &Subst,
-        searcher_ast: Option<&PatternAst<Lambda>>,
-        rule_name: Symbol,
-    ) -> Vec<Id> {
-        let mut subst = subst.clone();
-        let sym = Lambda::Symbol(format!("_{}", eclass).into());
-        subst.insert(self.fresh, egraph.add(sym));
-        self.fusion
-            .apply_one(egraph, eclass, &subst, searcher_ast, rule_name)
-    }
-}
-
-struct MapFissionApplier {
-    fresh: Var,
-    x: Var,
-    f: Var,
-    if_free: Pattern<Lambda>,
-    if_not_free: Pattern<Lambda>,
-}
-
-impl Applier<Lambda, LambdaAnalysis> for MapFissionApplier {
-    fn apply_one(
-        &self,
-        egraph: &mut EGraph,
-        eclass: Id,
-        subst: &Subst,
-        searcher_ast: Option<&PatternAst<Lambda>>,
-        rule_name: Symbol,
-    ) -> Vec<Id> {
-        let x = subst[self.x];
-        let f = subst[self.f];
-        let x_free_in_f = egraph[f].data.free.contains(&x);
-        if x_free_in_f {
-            self.if_free
-                .apply_one(egraph, eclass, &subst, searcher_ast, rule_name)
-        } else {
-            let mut subst = subst.clone();
-            let sym = Lambda::Symbol(format!("_m{}", eclass).into());
-            subst.insert(self.fresh, egraph.add(sym));
-            self.if_not_free
-                .apply_one(egraph, eclass, &subst, searcher_ast, rule_name)
-        }
-    }
-}
-
 #[test]
 fn simple_example() {
     // let start = "(app (lam comp (app (lam inc (app (app (var comp) (var inc)) (var inc) )) 
@@ -290,22 +217,25 @@ fn simple_example() {
     // let start = "(app (lam x (var x)) (var x))".parse().unwrap();
     // let goal = "(var x)".parse().unwrap();
 
-    // Id 1
-    let start = "(app (lam y (var y)) (var x))".parse().unwrap();
-    let goal = "(var x)".parse().unwrap();
+    let start = "(app (lam x (+ (var x) (+ (var y) (var y)))) 1)".parse().unwrap();
+    // let start = "(app (lam x (+ (var x) (var y))) 1)".parse().unwrap();
 
     let mut runner: Runner<Lambda, LambdaAnalysis> = Runner::default();
     runner = runner.with_expr(&start);
     let id = runner.egraph.find(*runner.roots.last().unwrap());
-    let before_path = "dots/simple_before.png";
-    runner.egraph.dot().to_png(before_path).unwrap();
+    let before_path_png = "dots/simple_before.png";
+    runner.egraph.dot().to_png(before_path_png).unwrap();
+    let before_path_dot = "dots/simple_before.dot";
+    runner.egraph.dot().to_dot(before_path_dot).unwrap();
 
     runner = runner.run(&rules());
     println!("{report}", report = runner.report());
-    runner.egraph.check_goals(id, &[goal]);
+    // runner.egraph.check_goals(id, &[goal]);
 
-    let after_path = "dots/simple_after.png";
-    runner.egraph.dot().to_png(after_path).unwrap();
+    let after_path_png = "dots/simple_after.png";
+    runner.egraph.dot().to_png(after_path_png).unwrap();
+    let after_path_dot = "dots/simple_after.dot";
+    runner.egraph.dot().to_dot(after_path_dot).unwrap();
 }
 
 egg::test_fn! {
@@ -398,13 +328,13 @@ egg::test_fn! {
 }
 
 egg::test_fn! {
-    #[cfg(not(debug_assertions))]
-    #[cfg_attr(feature = "test-explanations", ignore)]
+    // #[cfg(not(debug_assertions))]
+    // #[cfg_attr(feature = "test-explanations", ignore)]
     lambda_function_repeat, rules(),
-    runner = Runner::default()
-        .with_time_limit(std::time::Duration::from_secs(20))
-        .with_node_limit(150_000)
-        .with_iter_limit(60),
+    // runner = Runner::default()
+    //     .with_time_limit(std::time::Duration::from_secs(20))
+    //     .with_node_limit(150_000)
+    //     .with_iter_limit(60),
     "(let compose (lam f (lam g (lam x (app (var f)
                                        (app (var g) (var x))))))
      (let repeat (fix repeat (lam fun (lam n
@@ -452,165 +382,73 @@ egg::test_fn! {
                 (+ (var n) -1))
             (app (var fib)
                 (+ (var n) -2)))))))
-        (app (var fib) 8))"
-    => "21"
+        (app (var fib) 4))"
+    => "3"
 }
 
-#[test]
-fn lambda_fib_range() {
-    let range = 0..15;
-    for n in range {
-        let (start, goal) = benchmarks::fib_sexprs(n);
-        let start = start.parse().unwrap();
-        let goal = goal.parse().unwrap();
-        let runner_name = std::format!("lambda_fib_{n}");
-        eprintln!("####### {}", runner_name);
-
-        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
-        eprintln!("\n\n\n")
-    }
-}
-
-#[test]
-fn lambda_double_many_inside_range() {
-    let range = 0..10;
-    for n in range {
-        let (start, goal) = benchmarks::double_many_inside_sexprs(n);
-        let start = start.parse().unwrap();
-        let goal = goal.parse().unwrap();
-        let runner_name = std::format!("lambda_double_many_inside_{n}");
-        eprintln!("####### {}", runner_name);
-
-        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
-        eprintln!("\n\n\n")
-    }
-}
-
-#[test]
-fn lambda_double_many_outside_range() {
-    let range = 1..10;
-    for n in range {
-        let (start, goal) = benchmarks::double_many_outside_sexprs(n);
-        let start = start.parse().unwrap();
-        let goal = goal.parse().unwrap();
-        let runner_name = std::format!("lambda_double_many_outside_{n}");
-        eprintln!("####### {}", runner_name);
-
-        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
-        eprintln!("\n\n\n")
-    }
-}
-
-#[test]
-fn lambda_add_many_range() {
-    let range = 150..250;
-    for n in range {
-        let (start, goal) = benchmarks::add_many_sexprs(n);
-        let start = start.parse().unwrap();
-        let goal = goal.parse().unwrap();
-        let runner_name = std::format!("lambda_add_many_{n}");
-        eprintln!("####### {}", runner_name);
-
-        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
-        eprintln!("\n\n\n")
-    }
+egg::test_fn! {
+    lambda_compose_id, rules(),
+    "(app (app (lam f (lam g (app f g))) (lam x (var x))) (lam x (var x)))"
+    =>
+    "(lam ?x (var ?x))"
 }
 
 // #[test]
-// fn lambda_ematching_bench() {
-//     let exprs = &[
-//         "(let zeroone (lam x
-//             (if (= (var x) 0)
-//                 0
-//                 1))
-//             (+ (app (var zeroone) 0)
-//             (app (var zeroone) 10)))",
-//         "(let compose (lam f (lam g (lam x (app (var f)
-//                                         (app (var g) (var x))))))
-//         (let repeat (fix repeat (lam fun (lam n
-//             (if (= (var n) 0)
-//                 (lam i (var i))
-//                 (app (app (var compose) (var fun))
-//                     (app (app (var repeat)
-//                             (var fun))
-//                         (+ (var n) -1)))))))
-//         (let add1 (lam y (+ (var y) 1))
-//         (app (app (var repeat)
-//                 (var add1))
-//             2))))",
-//         "(let fib (fix fib (lam n
-//             (if (= (var n) 0)
-//                 0
-//             (if (= (var n) 1)
-//                 1
-//             (+ (app (var fib)
-//                     (+ (var n) -1))
-//                 (app (var fib)
-//                     (+ (var n) -2)))))))
-//             (app (var fib) 4))",
-//     ];
+// fn lambda_fib_range() {
+//     let range = 0..15;
+//     for n in range {
+//         let (start, goal) = benchmarks::fib_sexprs(n);
+//         let start = start.parse().unwrap();
+//         let goal = goal.parse().unwrap();
+//         let runner_name = std::format!("lambda_fib_{n}");
+//         eprintln!("####### {}", runner_name);
 
-//     let extra_patterns = &[
-//         "(if (= (var ?x) ?e) ?then ?else)",
-//         "(+ (+ ?a ?b) ?c)",
-//         "(let ?v (fix ?v ?e) ?e)",
-//         "(app (lam ?v ?body) ?e)",
-//         "(let ?v ?e (app ?a ?b))",
-//         "(app (let ?v ?e ?a) (let ?v ?e ?b))",
-//         "(let ?v ?e (+   ?a ?b))",
-//         "(+   (let ?v ?e ?a) (let ?v ?e ?b))",
-//         "(let ?v ?e (=   ?a ?b))",
-//         "(=   (let ?v ?e ?a) (let ?v ?e ?b))",
-//         "(let ?v ?e (if ?cond ?then ?else))",
-//         "(if (let ?v ?e ?cond) (let ?v ?e ?then) (let ?v ?e ?else))",
-//         "(let ?v1 ?e (var ?v1))",
-//         "(let ?v1 ?e (var ?v2))",
-//         "(let ?v1 ?e (lam ?v1 ?body))",
-//         "(let ?v1 ?e (lam ?v2 ?body))",
-//         "(lam ?v2 (let ?v1 ?e ?body))",
-//         "(lam ?fresh (let ?v1 ?e (let ?v2 (var ?fresh) ?body)))",
-//     ];
-
-//     egg::test::bench_egraph("lambda", rules(), exprs, extra_patterns);
+//         benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+//         eprintln!("\n\n\n")
+//     }
 // }
 
-egg::test_fn! {
-    lambda_map_fusion, rules(),
-    // "(map (var f) (map (var g) (var xs)))"
-    "(app (map (var f)) (app (map (var g)) (var xs)))"
-    =>
-    // "(map (lam ?x (app (var f) (app (var g) (var ?x)))) (var xs))"
-    "(app (map (lam ?x (app (var f) (app (var g) (var ?x))))) (var xs))"
-}
+// #[test]
+// fn lambda_double_many_inside_range() {
+//     let range = 0..10;
+//     for n in range {
+//         let (start, goal) = benchmarks::double_many_inside_sexprs(n);
+//         let start = start.parse().unwrap();
+//         let goal = goal.parse().unwrap();
+//         let runner_name = std::format!("lambda_double_many_inside_{n}");
+//         eprintln!("####### {}", runner_name);
 
-egg::test_fn! {
-    lambda_map_fission_not_free, rules(),
-    "(map (lam x (app (var f) (app (var g) (var x)))))"
-    =>
-    "(lam ?y 
-       (app (map (var f)) 
-            (app (lam ?x (app (var g) 
-                              (var ?x))) 
-                 (var ?y))))"
-}
+//         benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+//         eprintln!("\n\n\n")
+//     }
+// }
 
-#[test]
-fn lambda_map_fission() {
-    let start = "(map (lam x 
-                        (app (var f) 
-                             (app (var g) 
-                                  (var x)))))".parse().unwrap();
-    let goal = "(lam ?y 
-                  (app (map (var f)) 
-                       (app (lam ?x 
-                              (app (var g) 
-                                   (var ?x))) 
-                            (var ?y))))".parse().unwrap();
-    let runner_name = std::format!("lambda_map_fission");
-    let runner = egg::Runner::default()
-                    .with_iter_limit(100000)
-                    .with_node_limit(1000000)
-                    .with_time_limit(std::time::Duration::from_secs(30));
+// #[test]
+// fn lambda_double_many_outside_range() {
+//     let range = 1..10;
+//     for n in range {
+//         let (start, goal) = benchmarks::double_many_outside_sexprs(n);
+//         let start = start.parse().unwrap();
+//         let goal = goal.parse().unwrap();
+//         let runner_name = std::format!("lambda_double_many_outside_{n}");
+//         eprintln!("####### {}", runner_name);
 
-    benchmarks::test_runner(&runner_name, Some(runner), &rules(), start, &[goal], None, true);
-}
+//         benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+//         eprintln!("\n\n\n")
+//     }
+// }
+
+// #[test]
+// fn lambda_add_many_range() {
+//     let range = 150..250;
+//     for n in range {
+//         let (start, goal) = benchmarks::add_many_sexprs(n);
+//         let start = start.parse().unwrap();
+//         let goal = goal.parse().unwrap();
+//         let runner_name = std::format!("lambda_add_many_{n}");
+//         eprintln!("####### {}", runner_name);
+
+//         benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+//         eprintln!("\n\n\n")
+//     }
+// }

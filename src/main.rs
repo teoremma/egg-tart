@@ -11,6 +11,8 @@ mod phases;
 mod benchmarks;
 mod debruijn_small_step;
 mod destructive_rewrite;
+mod lambda_nofree_check;
+mod simple_named;
 
 fn main() {
     let mut lhs = lam(lam(app(app(var(4), var(2)), lam(app(var(1), var(3))))));
