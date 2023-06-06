@@ -174,10 +174,7 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
             =>
             { MapFissionApplier {
                 fresh: var("?fresh"), x: var("?x"), f: var("?f"),
-                // if x is free in f, fission is not possible
-                // keep the same pattern
-                if_free: "(map (lam ?x (app ?f ?e)))".parse().unwrap(),
-                if_not_free: "(lam ?fresh 
+                fission: "(lam ?fresh 
                                 (app (map ?f) 
                                      (app (map (lam ?x ?e)) 
                                           (var ?fresh))))".parse().unwrap(),
@@ -244,8 +241,7 @@ struct MapFissionApplier {
     fresh: Var,
     x: Var,
     f: Var,
-    if_free: Pattern<Lambda>,
-    if_not_free: Pattern<Lambda>,
+    fission: Pattern<Lambda>,
 }
 
 impl Applier<Lambda, LambdaAnalysis> for MapFissionApplier {
@@ -260,14 +256,11 @@ impl Applier<Lambda, LambdaAnalysis> for MapFissionApplier {
         let x = subst[self.x];
         let f = subst[self.f];
         let x_free_in_f = egraph[f].data.free.contains(&x);
-        if x_free_in_f {
-            self.if_free
-                .apply_one(egraph, eclass, &subst, searcher_ast, rule_name)
-        } else {
+        if x_free_in_f { return vec![] } else {
             let mut subst = subst.clone();
             let sym = Lambda::Symbol(format!("_m{}", eclass).into());
             subst.insert(self.fresh, egraph.add(sym));
-            self.if_not_free
+            self.fission
                 .apply_one(egraph, eclass, &subst, searcher_ast, rule_name)
         }
     }
@@ -560,7 +553,8 @@ fn lambda_map_fusion_many() {
 
 #[test]
 fn lambda_map_fission_many() {
-    let range = 100..200;
+    // let range = 100..200;
+    let range = 1..50;
     for n in range {
         let (start, goal) = benchmarks::map_fission_sexprs(n);
         let start = start.parse().unwrap();

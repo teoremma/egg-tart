@@ -1,6 +1,6 @@
 use egg::{rewrite as rw, *, test::test_runner};
 use fxhash::FxHashSet as HashSet;
-use crate::destructive_rewrite::{MatchOverLanguage, DestructiveRewrite, prune_enodes_matching};
+use fxhash::FxHashMap as HashMap;
 use crate::benchmarks;
 
 define_language! {
@@ -46,7 +46,7 @@ impl Lambda {
             Lambda::Fix([id1, id2]) => Lambda::Fix([increment_id(*id1, increment), increment_id(*id2, increment)]),
             Lambda::If([id1, id2, id3]) =>
                 Lambda::If([increment_id(*id1, increment), increment_id(*id2, increment), increment_id(*id3, increment)]),
-            Lambda::Map([id]) => Lambda::Map([increment_id(*id, increment)]),
+            Lambda::Map([id1]) => Lambda::Map([increment_id(*id1, increment)]),
             Lambda::Bool(_) | Lambda::Num(_) | Lambda::Symbol(_) => self.to_owned()
         }
     }
@@ -122,6 +122,7 @@ impl Analysis<Lambda> for LambdaAnalysis {
         }
         let constant = eval(egraph, enode);
         Data { constant, free, previous_rewrites: HashSet::default() }
+        // Data { constant, free }
     }
 
     fn modify(egraph: &mut EGraph, id: Id) {
@@ -149,8 +150,26 @@ fn is_not_same_var(v1: Var, v2: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool
     move |egraph, _, subst| egraph.find(subst[v1]) != egraph.find(subst[v2])
 }
 
+/// Checks if v1 and v1 are not the same and also if v1 is free in body
+fn is_not_same_var_and_free_in_body(v1: Var, v2: Var, body: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
+    move |egraph, _, subst| egraph.find(subst[v1]) != egraph.find(subst[v2])
+        && egraph[subst[body]].data.free.contains(&subst[v1])
+}
+
 fn is_const(v: Var) -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
     move |egraph, _, subst| egraph[subst[v]].data.constant.is_some()
+}
+
+fn is_free_in_vars(v: Var, vars: Vec<Var>)  -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
+    move |egraph, _, subst| vars.iter().any(|body| egraph[subst[*body]].data.free.contains(&subst[v]))
+}
+
+fn is_free_in(v: Var, body: Var)  -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
+    move |egraph, _, subst| egraph[subst[body]].data.free.contains(&subst[v])
+}
+
+fn is_not_free_in(v: Var, body: Var)  -> impl Fn(&mut EGraph, Id, &Subst) -> bool {
+    move |egraph, _, subst| !egraph[subst[body]].data.free.contains(&subst[v])
 }
 
 fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
@@ -190,24 +209,33 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
                 add_pattern: "(let ?v ?e ?body)".parse().unwrap(),
             }
         }),
+        rw!("let-not-free";  "(let ?v ?e ?body)" => {
+            DestructiveRewrite {
+                original_pattern: "(let ?v ?e ?body)".parse().unwrap(),
+                add_pattern: "?body".parse().unwrap(),
+            }
+        } if is_not_free_in(var("?v"), var("?body"))),
         rw!("let-app";  "(let ?v ?e (app ?a ?b))" => {
             DestructiveRewrite {
                 original_pattern: "(let ?v ?e (app ?a ?b))".parse().unwrap(),
                 add_pattern: "(app (let ?v ?e ?a) (let ?v ?e ?b))".parse().unwrap(),
             }
-        }),
+        // }),
+        } if is_free_in_vars(var("?v"), vec!(var("?a"), var("?b")))),
         rw!("let-add";  "(let ?v ?e (+   ?a ?b))" => {
             DestructiveRewrite {
                 original_pattern: "(let ?v ?e (+   ?a ?b))".parse().unwrap(),
                 add_pattern: "(+   (let ?v ?e ?a) (let ?v ?e ?b))".parse().unwrap(),
             }
-        }),
+        // }),
+        } if is_free_in_vars(var("?v"), vec!(var("?a"), var("?b")))),
         rw!("let-eq";   "(let ?v ?e (=   ?a ?b))" => {
             DestructiveRewrite {
                 original_pattern: "(let ?v ?e (=   ?a ?b))".parse().unwrap(),
                 add_pattern: "(=   (let ?v ?e ?a) (let ?v ?e ?b))".parse().unwrap(),
             }
-        }),
+        // }),
+        } if is_free_in_vars(var("?v"), vec!(var("?a"), var("?b")))),
         rw!("let-const";
             "(let ?v ?e ?c)" => {
             DestructiveRewrite {
@@ -221,8 +249,8 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
                     original_pattern: "(let ?v ?e (if ?cond ?then ?else))".parse().unwrap(),
                     add_pattern: "(if (let ?v ?e ?cond) (let ?v ?e ?then) (let ?v ?e ?else))".parse().unwrap(),
                 }
-            }
-        ),
+        // }),
+        } if is_free_in_vars(var("?v"), vec!(var("?cond"), var("?then"), var("?else")))),
         rw!("let-var-same"; "(let ?v1 ?e (var ?v1))" => {
             DestructiveRewrite {
                 original_pattern: "(let ?v1 ?e (var ?v1))".parse().unwrap(),
@@ -249,7 +277,8 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
                 if_not_free: "(lam ?v2 (let ?v1 ?e ?body))".parse().unwrap(),
                 if_free: "(lam ?fresh (let ?v1 ?e (let ?v2 (var ?fresh) ?body)))".parse().unwrap(),
             }}
-            if is_not_same_var(var("?v1"), var("?v2"))),
+            if is_not_same_var_and_free_in_body(var("?v1"), var("?v2"), var("?body"))),
+            // if is_not_same_var(var("?v1"), var("?v2"))),
         rw!("map-fusion";
             "(app (map ?f) (app (map ?g) ?e))" =>
             { MapFusionApplier {
@@ -261,10 +290,7 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
             =>
             { MapFissionApplier {
                 fresh: var("?fresh"), x: var("?x"), f: var("?f"),
-                // if x is free in f, fission is not possible
-                // keep the same pattern
-                if_free: "(map (lam ?x (app ?f ?e)))".parse().unwrap(),
-                if_not_free: "(lam ?fresh 
+                fission: "(lam ?fresh 
                                 (app (map ?f) 
                                      (app (map (lam ?x ?e)) 
                                           (var ?fresh))))".parse().unwrap(),
@@ -272,42 +298,153 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
     ]
 }
 
-impl MatchOverLanguage for Lambda {
-    fn match_over<P>(&self, candidate: &Self, mut match_child: P) -> bool
-    where Self: Sized,
-          P: FnMut(&Id, &Id) -> bool,
-    {
-        match (candidate, self) {
-            // First base cases are when leaves of the expressions match
-            (Lambda::Bool(b_re), Lambda::Bool(b)) => b_re == b,
-            (Lambda::Num(n_re), Lambda::Num(n)) => n_re == n,
-            (Lambda::Symbol(s_re), Lambda::Symbol(s)) => s_re == s,
-            // Recursive cases
-            (Lambda::Var(v_re), Lambda::Var(v)) =>
-                match_child(v, v_re),
-            (Lambda::Add([n1_re, n2_re]), Lambda::Add([n1, n2])) =>
-                match_child(n1, n1_re)
-                && match_child(n2, n2_re),
-            (Lambda::App([e1_re, e2_re]), Lambda::App([e1, e2])) =>
-                match_child(e1, e1_re)
-                && match_child(e2, e2_re),
-            (Lambda::Lambda([x_re, body_re]), Lambda::Lambda([x, body])) =>
-                match_child(x, x_re)
-                && match_child(body, body_re),
-            (Lambda::Let([x_re, v_re, e_re]), Lambda::Let([x, v, e])) =>
-                match_child(x, x_re)
-                && match_child(v, v_re)
-                && match_child(e, e_re),
-            (Lambda::Fix([e1_re, e2_re]), Lambda::Fix([e1, e2])) =>
-                match_child(e1, e1_re)
-                && match_child(e2, e2_re),
-            (Lambda::If([b_re, e1_re, e2_re]), Lambda::If([b, e1, e2])) =>
-                match_child(b, b_re)
-                && match_child(e1, e1_re)
-                && match_child(e2, e2_re),
-            _ => false
+// TODO: this and its applier can probably be generalized over languages L that
+// implement match_enode
+struct DestructiveRewrite {
+    original_pattern: Pattern<Lambda>,
+    add_pattern: Pattern<Lambda>,
+}
+
+impl Applier<Lambda, LambdaAnalysis> for DestructiveRewrite {
+    fn apply_one(
+        &self,
+        egraph: &mut egg::EGraph<Lambda, LambdaAnalysis>,
+        eclass: Id,
+        subst: &Subst,
+        searcher_ast: Option<&PatternAst<Lambda>>,
+        rule_name: Symbol,
+    ) -> Vec<Id> {
+        let memo = (rule_name, subst.clone(), self.original_pattern.ast.clone());
+        if egraph[eclass].data.previous_rewrites.contains(&memo) {
+            return vec!();
         }
+        egraph[eclass].data.previous_rewrites.insert(memo);
+        let mut ids = self.add_pattern.apply_one(egraph, eclass, subst, searcher_ast, rule_name);
+        if prune_enodes_matching(egraph, &self.original_pattern.ast, subst, &eclass, rule_name) {
+            ids.push(eclass);
+        }
+        ids
     }
+}
+
+/// Removes enodes matching the rec_expr from the egraph.
+///
+/// I think that we could do slightly better than a HashMap by having a mutable
+/// RecExpr and storing which Ids we've visited on the nodes, but the difference
+/// between passing around clones of a HashMap/HashSet everywhere and using a
+/// single mutable HashMap is minimal in my testing (0.2s for a test taking 9s -
+/// although this was just a single test).
+fn prune_enodes_matching(egraph: &mut egg::EGraph<Lambda, LambdaAnalysis>, rec_expr: &RecExpr<ENodeOrVar<Lambda>>, subst: &Subst, eclass: &Id, rule_name: Symbol) -> bool {
+    let dr_enabled = match rule_name.as_str() {
+        "if-true" => true,
+        "if-false" => true,
+        "if-elim" => true,
+        "beta" => false,
+        "let-app" => true,
+        "let-add" => true,
+        "let-eq" => true,
+        "let-const" => true,
+        "let-if" => false,
+        "let-var-same" => true,
+        "let-var-diff" => true,
+        "let-lam-same" => false,
+        "let-lam-diff" => false,
+        "let-not-free" => true,
+        _ => false,
+    };
+    if !dr_enabled {
+        return false;
+    }
+    let mut memo = HashMap::default();
+    let rec_expr_id: Id = (rec_expr.as_ref().len() - 1).into();
+    // Handles cycles - if we get back here then it matches.
+    memo.insert((rec_expr_id, *eclass), true);
+    let original_len = egraph[*eclass].nodes.len();
+
+    if original_len == 1 {
+        return false;
+    }
+    egraph[*eclass].nodes = egraph[*eclass].nodes
+        .to_owned()
+        .into_iter()
+        .filter(|node| {
+            let res = match_enode(egraph, &rec_expr, &rec_expr_id, subst, node, &mut memo);
+            // if res {
+            //     // println!("{} filtering node {:?}", rule_name, node)
+            // }
+            !res
+        })
+        .collect();
+    original_len > egraph[*eclass].nodes.len()
+}
+
+/// This function recursively traverses the rec_expr and enode in lock step. If
+/// they have matching constants, then we can simply check their equality. Most
+/// of the cases, however, come from recursively checking the contained rec_expr
+/// nodes against contained eclasses.
+fn match_enode(egraph: &egg::EGraph<Lambda, LambdaAnalysis>, rec_expr: &RecExpr<ENodeOrVar<Lambda>>, rec_expr_id: &Id, subst: &Subst, enode: &Lambda, memo: &mut HashMap<(Id, Id), bool>) -> bool {
+    match &rec_expr[*rec_expr_id] {
+        ENodeOrVar::ENode(n) => {
+            match (n, enode) {
+                // First base cases are when leaves of the expressions match
+                (Lambda::Bool(b_re), Lambda::Bool(b)) => b_re == b,
+                (Lambda::Num(n_re), Lambda::Num(n)) => n_re == n,
+                (Lambda::Symbol(s_re), Lambda::Symbol(s)) => s_re == s,
+                // Recursive cases
+                (Lambda::Var(v_re), Lambda::Var(v)) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, v_re, subst, v, memo),
+                (Lambda::Add([n1_re, n2_re]), Lambda::Add([n1, n2])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, n1_re, subst, n1, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, n2_re, subst, n2, memo),
+                (Lambda::App([e1_re, e2_re]), Lambda::App([e1, e2])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, e1_re, subst, e1, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, e2_re, subst, e2, memo),
+                (Lambda::Lambda([x_re, body_re]), Lambda::Lambda([x, body])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, x_re, subst, x, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, body_re, subst, body, memo),
+                (Lambda::Let([x_re, v_re, e_re]), Lambda::Let([x, v, e])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, x_re, subst, x, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, v_re, subst, v, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, e_re, subst, e, memo),
+                (Lambda::Fix([e1_re, e2_re]), Lambda::Fix([e1, e2])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, e1_re, subst, e1, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, e2_re, subst, e2, memo),
+                (Lambda::If([b_re, e1_re, e2_re]), Lambda::If([b, e1, e2])) =>
+                    any_enode_in_eclass_matches(egraph, rec_expr, b_re, subst, b, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, e1_re, subst, e1, memo)
+                    && any_enode_in_eclass_matches(egraph, rec_expr, e2_re, subst, e2, memo),
+                _ => false
+            }
+        }
+        // I think this is incomparable - an enode is not an eclass. Perhaps
+        // they are equal if the enode is in the eclass? I kind of don't think
+        // so.
+        ENodeOrVar::Var(_) => false,
+    }
+}
+
+/// In this case, we have a concrete AST node (ENodeOrVar::EnNode) or Var
+/// (ENodeOrVar::Var) in the rec_expr that we want to compare to an entire
+/// eclass. Comparing a Var to an eclass is a base case - we just check to see
+/// if they're the same. Otherwise, we need to check if there is any enode in
+/// the class that we can match with the concrete AST node.
+fn any_enode_in_eclass_matches(egraph: &egg::EGraph<Lambda, LambdaAnalysis>, rec_expr: &RecExpr<ENodeOrVar<Lambda>>, rec_expr_id: &Id, subst: &Subst, eclass: &Id, memo: &mut HashMap<(Id, Id), bool>) -> bool {
+    if let Some(res) = memo.get(&(*rec_expr_id, *eclass)) {
+        return *res
+    }
+    let res = {
+        // This is the second and last base case (aside from cycles) where we can
+        // conclude a pattern matches.
+        if let ENodeOrVar::Var(v) = rec_expr[*rec_expr_id] {
+            return subst[v] == *eclass;
+        }
+        // If we cycle back to this node, then the pattern matches.
+        memo.insert((*rec_expr_id, *eclass), true);
+        egraph[*eclass].iter().any(|node| match_enode(egraph, rec_expr, &rec_expr_id, subst, node, memo))
+    };
+    // Update the memo since we only set it to 'true' temporarily to handle cycles.
+    memo.insert((*rec_expr_id, *eclass), res);
+    res
 }
 
 struct CaptureAvoid {
@@ -374,8 +511,7 @@ struct MapFissionApplier {
     fresh: Var,
     x: Var,
     f: Var,
-    if_free: Pattern<Lambda>,
-    if_not_free: Pattern<Lambda>,
+    fission: Pattern<Lambda>,
 }
 
 impl Applier<Lambda, LambdaAnalysis> for MapFissionApplier {
@@ -390,14 +526,11 @@ impl Applier<Lambda, LambdaAnalysis> for MapFissionApplier {
         let x = subst[self.x];
         let f = subst[self.f];
         let x_free_in_f = egraph[f].data.free.contains(&x);
-        if x_free_in_f {
-            self.if_free
-                .apply_one(egraph, eclass, &subst, searcher_ast, rule_name)
-        } else {
+        if x_free_in_f { return vec![] } else {
             let mut subst = subst.clone();
             let sym = Lambda::Symbol(format!("_m{}", eclass).into());
             subst.insert(self.fresh, egraph.add(sym));
-            self.if_not_free
+            self.fission
                 .apply_one(egraph, eclass, &subst, searcher_ast, rule_name)
         }
     }
@@ -513,7 +646,7 @@ egg::test_fn! {
      (app (var double)
          (var add1)))))))))))))"
     =>
-    "(lam ?x (+ (var ?x) 256))"
+    "(lam ?x (+ (var ?x) 512))"
 }
 
 // 8 doubles times out for CallByName
@@ -569,11 +702,10 @@ egg::test_fn! {
          (app (var double)
          (app (var double)
          (app (var double)
-         (app (var double)
-              (var double)))))
+              (var double))))
          (var add1)))))"
     =>
-    "(lam ?x (+ (var ?x) 32))"
+    "(lam ?x (+ (var ?x) 16))"
 }
 
 egg::test_fn! {
@@ -689,6 +821,40 @@ egg::test_fn! {
 }
 
 #[test]
+fn dr_simple_example() {
+    // let start = "(app (lam comp (app (lam inc (app (app (var comp) (var inc)) (var inc) ))
+    //                                  (lam y (+ (var y) 1))))
+    //                   (lam f (lam g (lam x (app (var f)
+    //                                             (app (var g) (var x)))))))".parse().unwrap();
+    // let goal = "(lam ?x (+ (var ?x) 2))".parse().unwrap();
+
+    // // Simple 1
+    // let start = "(app (lam x (+ (var x) (var x))) 2)".parse().unwrap();
+    // let goal = "4".parse().unwrap();
+
+    // // Id 1
+    // let start = "(app (lam x (var x)) (var x))".parse().unwrap();
+    // let goal = "(var x)".parse().unwrap();
+
+    // Id 1
+    let start = "(app (lam x (app (var x) (app (var y) (var z)))) 1)".parse().unwrap();
+    let goal = "(app 1 (app (var y) (var z)))".parse().unwrap();
+
+    let mut runner: Runner<Lambda, LambdaAnalysis> = Runner::default();
+    runner = runner.with_expr(&start);
+    let id = runner.egraph.find(*runner.roots.last().unwrap());
+    let before_path = "dots/dr_simple_before.png";
+    runner.egraph.dot().to_png(before_path).unwrap();
+
+    runner = runner.run(&rules());
+    println!("{report}", report = runner.report());
+    runner.egraph.check_goals(id, &[goal]);
+
+    let after_path = "dots/dr_simple_after.png";
+    runner.egraph.dot().to_png(after_path).unwrap();
+}
+
+#[test]
 fn lambda_dr_fib_range() {
     let range = 0..30;
     for n in range {
@@ -766,7 +932,8 @@ fn lambda_dr_map_fusion_many() {
 
 #[test]
 fn lambda_dr_map_fission_many() {
-    let range = 100..200;
+    // let range = 100..200;
+    let range = 1..50;
     for n in range {
         let (start, goal) = benchmarks::map_fission_sexprs(n);
         let start = start.parse().unwrap();
