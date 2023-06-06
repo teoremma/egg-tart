@@ -553,8 +553,8 @@ fn lambda_map_fusion_many() {
 
 #[test]
 fn lambda_map_fission_many() {
-    // let range = 100..200;
-    let range = 1..50;
+    let range = 100..200;
+    // let range = 1..50;
     for n in range {
         let (start, goal) = benchmarks::map_fission_sexprs(n);
         let start = start.parse().unwrap();

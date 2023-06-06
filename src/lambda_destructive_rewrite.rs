@@ -335,26 +335,26 @@ impl Applier<Lambda, LambdaAnalysis> for DestructiveRewrite {
 /// single mutable HashMap is minimal in my testing (0.2s for a test taking 9s -
 /// although this was just a single test).
 fn prune_enodes_matching(egraph: &mut egg::EGraph<Lambda, LambdaAnalysis>, rec_expr: &RecExpr<ENodeOrVar<Lambda>>, subst: &Subst, eclass: &Id, rule_name: Symbol) -> bool {
-    let dr_enabled = match rule_name.as_str() {
-        "if-true" => true,
-        "if-false" => true,
-        "if-elim" => true,
-        "beta" => false,
-        "let-app" => true,
-        "let-add" => true,
-        "let-eq" => true,
-        "let-const" => true,
-        "let-if" => false,
-        "let-var-same" => true,
-        "let-var-diff" => true,
-        "let-lam-same" => false,
-        "let-lam-diff" => false,
-        "let-not-free" => true,
-        _ => false,
-    };
-    if !dr_enabled {
-        return false;
-    }
+    // let dr_enabled = match rule_name.as_str() {
+    //     "if-true" => true,
+    //     "if-false" => true,
+    //     "if-elim" => true,
+    //     "beta" => false,
+    //     "let-app" => true,
+    //     "let-add" => true,
+    //     "let-eq" => true,
+    //     "let-const" => true,
+    //     "let-if" => false,
+    //     "let-var-same" => true,
+    //     "let-var-diff" => true,
+    //     "let-lam-same" => false,
+    //     "let-lam-diff" => false,
+    //     "let-not-free" => true,
+    //     _ => false,
+    // };
+    // if !dr_enabled {
+    //     return false;
+    // }
     let mut memo = HashMap::default();
     let rec_expr_id: Id = (rec_expr.as_ref().len() - 1).into();
     // Handles cycles - if we get back here then it matches.
@@ -932,8 +932,8 @@ fn lambda_dr_map_fusion_many() {
 
 #[test]
 fn lambda_dr_map_fission_many() {
-    // let range = 100..200;
-    let range = 1..50;
+    let range = 100..200;
+    // let range = 1..50;
     for n in range {
         let (start, goal) = benchmarks::map_fission_sexprs(n);
         let start = start.parse().unwrap();
