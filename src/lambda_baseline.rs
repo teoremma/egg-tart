@@ -170,17 +170,17 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
                 fusion: "(app (map (lam ?fresh (app ?f (app ?g (var ?fresh))))) ?e)".parse().unwrap(),
             }}),
         rw!("map-fission";
-            "(map (lam ?x (app ?f (app ?g (var ?x)))))"
+            "(map (lam ?x (app ?f (app ?g ?e))))"
             =>
             { MapFissionApplier {
                 fresh: var("?fresh"), x: var("?x"), f: var("?f"),
                 // if x is free in f, fission is not possible
                 // keep the same pattern
-                if_free: "(map (lam ?x (app ?f (app ?g (var ?x)))))".parse().unwrap(),
+                if_free: "(map (lam ?x (app ?f (app ?g ?e))))".parse().unwrap(),
                 if_not_free: "(lam ?fresh 
                                 (app (map ?f) 
                                      (app (map (lam ?x 
-                                                    (app ?g (var ?x)))) 
+                                                    (app ?g ?e))) 
                                           (var ?fresh))))".parse().unwrap(),
             }}),
     ]
@@ -516,103 +516,22 @@ fn lambda_add_many_range() {
     }
 }
 
-// #[test]
-// fn lambda_ematching_bench() {
-//     let exprs = &[
-//         "(let zeroone (lam x
-//             (if (= (var x) 0)
-//                 0
-//                 1))
-//             (+ (app (var zeroone) 0)
-//             (app (var zeroone) 10)))",
-//         "(let compose (lam f (lam g (lam x (app (var f)
-//                                         (app (var g) (var x))))))
-//         (let repeat (fix repeat (lam fun (lam n
-//             (if (= (var n) 0)
-//                 (lam i (var i))
-//                 (app (app (var compose) (var fun))
-//                     (app (app (var repeat)
-//                             (var fun))
-//                         (+ (var n) -1)))))))
-//         (let add1 (lam y (+ (var y) 1))
-//         (app (app (var repeat)
-//                 (var add1))
-//             2))))",
-//         "(let fib (fix fib (lam n
-//             (if (= (var n) 0)
-//                 0
-//             (if (= (var n) 1)
-//                 1
-//             (+ (app (var fib)
-//                     (+ (var n) -1))
-//                 (app (var fib)
-//                     (+ (var n) -2)))))))
-//             (app (var fib) 4))",
-//     ];
-
-//     let extra_patterns = &[
-//         "(if (= (var ?x) ?e) ?then ?else)",
-//         "(+ (+ ?a ?b) ?c)",
-//         "(let ?v (fix ?v ?e) ?e)",
-//         "(app (lam ?v ?body) ?e)",
-//         "(let ?v ?e (app ?a ?b))",
-//         "(app (let ?v ?e ?a) (let ?v ?e ?b))",
-//         "(let ?v ?e (+   ?a ?b))",
-//         "(+   (let ?v ?e ?a) (let ?v ?e ?b))",
-//         "(let ?v ?e (=   ?a ?b))",
-//         "(=   (let ?v ?e ?a) (let ?v ?e ?b))",
-//         "(let ?v ?e (if ?cond ?then ?else))",
-//         "(if (let ?v ?e ?cond) (let ?v ?e ?then) (let ?v ?e ?else))",
-//         "(let ?v1 ?e (var ?v1))",
-//         "(let ?v1 ?e (var ?v2))",
-//         "(let ?v1 ?e (lam ?v1 ?body))",
-//         "(let ?v1 ?e (lam ?v2 ?body))",
-//         "(lam ?v2 (let ?v1 ?e ?body))",
-//         "(lam ?fresh (let ?v1 ?e (let ?v2 (var ?fresh) ?body)))",
-//     ];
-
-//     egg::test::bench_egraph("lambda", rules(), exprs, extra_patterns);
-// }
-
 egg::test_fn! {
     lambda_map_fusion, rules(),
-    // "(map (var f) (map (var g) (var xs)))"
     "(app (map (var f)) (app (map (var g)) (var xs)))"
     =>
-    // "(map (lam ?x (app (var f) (app (var g) (var ?x)))) (var xs))"
     "(app (map (lam ?x (app (var f) (app (var g) (var ?x))))) (var xs))"
 }
 
 egg::test_fn! {
-    lambda_map_fission_not_free, rules(),
+    lambda_map_fission, rules(),
     "(map (lam x (app (var f) (app (var g) (var x)))))"
     =>
     "(lam ?y 
        (app (map (var f)) 
-            (app (lam ?x (app (var g) 
-                              (var ?x))) 
+            (app (map (lam x (app (var g) 
+                              (var x)))) 
                  (var ?y))))"
-}
-
-#[test]
-fn lambda_map_fission() {
-    let start = "(map (lam x 
-                        (app (var f) 
-                             (app (var g) 
-                                  (var x)))))".parse().unwrap();
-    let goal = "(lam ?y 
-                  (app (map (var f)) 
-                       (app (lam ?x 
-                              (app (var g) 
-                                   (var ?x))) 
-                            (var ?y))))".parse().unwrap();
-    let runner_name = std::format!("lambda_map_fission");
-    let runner = egg::Runner::default()
-                    .with_iter_limit(100000)
-                    .with_node_limit(1000000)
-                    .with_time_limit(std::time::Duration::from_secs(30));
-
-    benchmarks::test_runner(&runner_name, Some(runner), &rules(), start, &[goal], None, true);
 }
 
 #[test]

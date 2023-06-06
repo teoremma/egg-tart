@@ -172,3 +172,11 @@ pub fn map_fusion_sexprs(n: usize) -> (String, String) {
     let goal = std::format!("(app (map (lam ?x {})) (var xs))", composed(n));
     (start, goal)
 }
+
+// pub fn map_fission_sexprs(n: usize) -> (String, String) {
+//     fn composed(n: usize) -> String {
+//         if n == 0 { "(var x)".to_string() }
+//         else { std::format!("(app (var f{}) {})", n, composed(n - 1)) }
+//     }
+
+// }
