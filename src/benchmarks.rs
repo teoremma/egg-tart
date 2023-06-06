@@ -173,10 +173,20 @@ pub fn map_fusion_sexprs(n: usize) -> (String, String) {
     (start, goal)
 }
 
-// pub fn map_fission_sexprs(n: usize) -> (String, String) {
-//     fn composed(n: usize) -> String {
-//         if n == 0 { "(var x)".to_string() }
-//         else { std::format!("(app (var f{}) {})", n, composed(n - 1)) }
-//     }
+pub fn map_fission_sexprs(n: usize) -> (String, String) {
+    fn composed(n: usize) -> String {
+        if n == 0 { "(var x)".to_string() }
+        else { std::format!("(app (var f{}) {})", n, composed(n - 1)) }
+    }
+    fn fissioned(n: usize) -> String {
+        if n == 0 { "(map (lam x (var x)))".to_string() }
+        else { std::format!("(lam ?v{} 
+                               (app (map (var f{}))
+                                    (app {}
+                                         (var ?v{}))))", n, n, fissioned(n - 1), n) }
+    }
 
-// }
+    let start = std::format!("(map (lam x {}))", composed(n));
+    let goal = fissioned(n);
+    (start, goal)
+}

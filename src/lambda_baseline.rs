@@ -170,17 +170,16 @@ fn rules() -> Vec<Rewrite<Lambda, LambdaAnalysis>> {
                 fusion: "(app (map (lam ?fresh (app ?f (app ?g (var ?fresh))))) ?e)".parse().unwrap(),
             }}),
         rw!("map-fission";
-            "(map (lam ?x (app ?f (app ?g ?e))))"
+            "(map (lam ?x (app ?f ?e)))"
             =>
             { MapFissionApplier {
                 fresh: var("?fresh"), x: var("?x"), f: var("?f"),
                 // if x is free in f, fission is not possible
                 // keep the same pattern
-                if_free: "(map (lam ?x (app ?f (app ?g ?e))))".parse().unwrap(),
+                if_free: "(map (lam ?x (app ?f ?e)))".parse().unwrap(),
                 if_not_free: "(lam ?fresh 
                                 (app (map ?f) 
-                                     (app (map (lam ?x 
-                                                    (app ?g ?e))) 
+                                     (app (map (lam ?x ?e)) 
                                           (var ?fresh))))".parse().unwrap(),
             }}),
     ]
@@ -534,14 +533,39 @@ egg::test_fn! {
                  (var ?y))))"
 }
 
+egg::test_fn! {
+    lambda_map_fission_2, rules(),
+    "(map (lam x (app (var f) (var x))))"
+    =>
+    "(lam ?y 
+       (app (map (var f)) 
+            (app (map (lam x (var x))) 
+                 (var ?y))))"
+}
+
 #[test]
 fn lambda_map_fusion_many() {
-    let range = 1..20;
+    let range = 1..50;
     for n in range {
         let (start, goal) = benchmarks::map_fusion_sexprs(n);
         let start = start.parse().unwrap();
         let goal = goal.parse().unwrap();
         let runner_name = std::format!("lambda_map_fusion_{n}");
+        eprintln!("####### {}", runner_name);
+
+        benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
+        eprintln!("\n\n\n")
+    }
+}
+
+#[test]
+fn lambda_map_fission_many() {
+    let range = 100..200;
+    for n in range {
+        let (start, goal) = benchmarks::map_fission_sexprs(n);
+        let start = start.parse().unwrap();
+        let goal = goal.parse().unwrap();
+        let runner_name = std::format!("lambda_map_fission_{n}");
         eprintln!("####### {}", runner_name);
 
         benchmarks::test_runner(&runner_name, None, &rules(), start, &[goal], None, true);
