@@ -66,19 +66,23 @@ pub fn test_runner<L, A>(
 
     let report = runner.report();
     eprintln!("{report}");
-    println!("{name},{stop_reason:?},{nodes},{classes},{memo},{time},{its},{rebuilds}",
-        stop_reason=report.stop_reason,
-        nodes=report.egraph_nodes,
-        classes=report.egraph_classes,
-        memo=report.memo_size,
-        time=report.total_time,
-        its=report.iterations,
-        rebuilds=report.rebuilds);
+    println!(
+        "{name},{stop_reason:?},{nodes},{classes},{memo},{time},{its},{rebuilds}",
+        stop_reason = report.stop_reason,
+        nodes = report.egraph_nodes,
+        classes = report.egraph_classes,
+        memo = report.memo_size,
+        time = report.total_time,
+        its = report.iterations,
+        rebuilds = report.rebuilds
+    );
 }
 
 pub fn fibonacci(n: usize) -> usize {
     let (mut a, mut b) = (0, 1);
-    if n == 0 { return a }
+    if n == 0 {
+        return a;
+    }
     for _ in 1..n {
         b += a;
         a = b - a;
@@ -87,8 +91,8 @@ pub fn fibonacci(n: usize) -> usize {
 }
 
 pub fn fib_sexprs(n: usize) -> (String, String) {
-    let start = 
-    std::format!("(let fib (fix fib (lam n
+    let start = std::format!(
+        "(let fib (fix fib (lam n
         (if (= (var n) 0)
             0
         (if (= (var n) 1)
@@ -97,15 +101,15 @@ pub fn fib_sexprs(n: usize) -> (String, String) {
                 (+ (var n) -1))
             (app (var fib)
                 (+ (var n) -2)))))))
-        (app (var fib) {n}))");
-    let goal = std::format!("{tgt}", tgt=fibonacci(n));
+        (app (var fib) {n}))"
+    );
+    let goal = std::format!("{tgt}", tgt = fibonacci(n));
     (start, goal)
 }
 
 pub fn fib_sexprs_db(n: usize) -> (String, String) {
-    let start =
-    std::format!(
-    "(let (fix (lam
+    let start = std::format!(
+        "(let (fix (lam
         (if (= @0 0)
             0
         (if (= @0 1)
@@ -114,76 +118,139 @@ pub fn fib_sexprs_db(n: usize) -> (String, String) {
                 (+ @0 -1))
             (app @1
                 (+ @0 -2)))))))
-        (app @0 {n}))");
-    let goal = std::format!("{tgt}", tgt=fibonacci(n));
+        (app @0 {n}))"
+    );
+    let goal = std::format!("{tgt}", tgt = fibonacci(n));
     (start, goal)
 }
 
 pub fn double_many_inside_sexprs(n: usize) -> (String, String) {
     fn double_add(n: usize) -> String {
-        if n == 0 { "(var add1)".to_string() }
-        else { std::format!("(app (var double) {})", double_add(n - 1)) }
+        if n == 0 {
+            "(var add1)".to_string()
+        } else {
+            std::format!("(app (var double) {})", double_add(n - 1))
+        }
     }
-    let start = std::format!("(let compose (lam f (lam g (lam x (app (var f)
+    let start = std::format!(
+        "(let compose (lam f (lam g (lam x (app (var f)
                                                    (app (var g) (var x))))))
                  (let double (lam f (app (app (var compose) (var f)) (var f)))
-                 (let add1 (lam y (+ (var y) 1)) {} )))", double_add(n));
+                 (let add1 (lam y (+ (var y) 1)) {} )))",
+        double_add(n)
+    );
     let goal = std::format!("(lam ?x (+ (var ?x) {}))", usize::pow(2, n as u32));
     (start, goal)
 }
 
 pub fn double_many_outside_sexprs(n: usize) -> (String, String) {
     fn app_double(n: usize) -> String {
-        if n == 0 { panic!("Shouldn't be zero") }
-        else if n == 1 { "(var double)".to_string() }
-        else {std::format!("(app (var double) {})", app_double(n - 1))}
+        if n == 0 {
+            panic!("Shouldn't be zero")
+        } else if n == 1 {
+            "(var double)".to_string()
+        } else {
+            std::format!("(app (var double) {})", app_double(n - 1))
+        }
     }
-    let start = std::format!("(let compose (lam f (lam g (lam x (app (var f)
+    let start = std::format!(
+        "(let compose (lam f (lam g (lam x (app (var f)
                                                    (app (var g) (var x))))))
                  (let double (lam f (app (app (var compose) (var f)) (var f)))
-                 (let add1 (lam y (+ (var y) 1)) (app {} (var add1)) )))", app_double(n));
+                 (let add1 (lam y (+ (var y) 1)) (app {} (var add1)) )))",
+        app_double(n)
+    );
     let goal = std::format!("(lam ?x (+ (var ?x) {}))", usize::pow(2, n as u32));
     (start, goal)
 }
 
 pub fn add_many_sexprs(n: usize) -> (String, String) {
     fn comp_add1(n: usize) -> String {
-        if n == 0 { panic!("Shouldn't be zero") }
-        else if n == 1 { "(var add1)".to_string() }
-        else { std::format!("(app (app (var comp) (var add1)) {})", comp_add1(n - 1)) }
+        if n == 0 {
+            panic!("Shouldn't be zero")
+        } else if n == 1 {
+            "(var add1)".to_string()
+        } else {
+            std::format!("(app (app (var comp) (var add1)) {})", comp_add1(n - 1))
+        }
     }
-    let start = std::format!("(let comp (lam f (lam g (lam x (app (var f)
+    let start = std::format!(
+        "(let comp (lam f (lam g (lam x (app (var f)
                                                    (app (var g) (var x))))))
-                 (let add1 (lam y (+ (var y) 1)) {} ))", comp_add1(n));
+                 (let add1 (lam y (+ (var y) 1)) {} ))",
+        comp_add1(n)
+    );
     let goal = std::format!("(lam ?x (+ (var ?x) {}))", n);
     (start, goal)
 }
 
 pub fn map_fusion_sexprs(n: usize) -> (String, String) {
     fn fusion_start(n: usize) -> String {
-        if n == 0 { "(var xs)".to_string() }
-        else { std::format!("(app (map (var f{})) {})", n, fusion_start(n - 1)) }
+        if n == 0 {
+            "(var xs)".to_string()
+        } else {
+            std::format!("(app (map (var f{})) {})", n, fusion_start(n - 1))
+        }
     }
     fn composed(n: usize) -> String {
-        if n == 0 { "(var ?x)".to_string() }
-        else { std::format!("(app (var f{}) {})", n, composed(n - 1)) }
+        if n == 0 {
+            "(var ?x)".to_string()
+        } else {
+            std::format!("(app (var f{}) {})", n, composed(n - 1))
+        }
     }
     let start = fusion_start(n);
     let goal = std::format!("(app (map (lam ?x {})) (var xs))", composed(n));
     (start, goal)
 }
 
+pub fn map_fusion_sexprs_with_compose(n: usize) -> (String, String) {
+    fn many_maps(n: usize) -> String {
+        if n == 1 {
+            "(map (var ?f1))".to_string()
+        } else {
+            std::format!("(compose (map (var ?f{})) {})", n, many_maps(n - 1))
+        }
+    }
+    fn one_map(n: usize) -> String {
+        if n == 1 {
+            "(var ?f1)".to_string()
+        } else {
+            std::format!("(compose (var ?f{}) {})", n, one_map(n - 1))
+        }
+    }
+    let start = std::format!("(app {} (var xs))", many_maps(n));
+    let goal = std::format!("(app (map {}) (var xs))", one_map(n));
+    (start, goal)
+    // (
+    //     std::format!("(app (compose (map (var f1)) (map (var f2))) (var xs))"),
+    //     std::format!("(app (map (compose (var f1) (var f2))) (var xs))"),
+    // )
+}
+
 pub fn map_fission_sexprs(n: usize) -> (String, String) {
     fn composed(n: usize) -> String {
-        if n == 0 { "(var x)".to_string() }
-        else { std::format!("(app (var f{}) {})", n, composed(n - 1)) }
+        if n == 0 {
+            "(var x)".to_string()
+        } else {
+            std::format!("(app (var f{}) {})", n, composed(n - 1))
+        }
     }
     fn fissioned(n: usize) -> String {
-        if n == 0 { "(map (lam x (var x)))".to_string() }
-        else { std::format!("(lam ?v{} 
+        if n == 0 {
+            "(map (lam x (var x)))".to_string()
+        } else {
+            std::format!(
+                "(lam ?v{} 
                                (app (map (var f{}))
                                     (app {}
-                                         (var ?v{}))))", n, n, fissioned(n - 1), n) }
+                                         (var ?v{}))))",
+                n,
+                n,
+                fissioned(n - 1),
+                n
+            )
+        }
     }
 
     let start = std::format!("(map (lam x {}))", composed(n));

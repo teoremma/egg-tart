@@ -1,18 +1,21 @@
 mod debruijn;
-mod lambda_baseline;
 mod lambda;
+mod lambda_baseline;
 // mod reps;
 mod reps;
 // use reps::named::Named;
 // use reps::named::Named::*;
 use reps::named::*;
-mod lambda_destructive_rewrite;
-mod phases;
 mod benchmarks;
 mod debruijn_small_step;
 mod destructive_rewrite;
+mod lambda_destructive_rewrite;
 mod lambda_nofree_check;
+mod phases;
 mod simple_named;
+
+mod lambda_baseline_compose_prim;
+mod lambda_destructive_rewrite_compose_prim;
 
 fn main() {
     let mut lhs = lam(lam(app(app(var(4), var(2)), lam(app(var(1), var(3))))));
